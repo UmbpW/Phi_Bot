@@ -100,7 +100,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v19-finance-rhythm"
+BOT_VERSION = "Phi_Bot v19.1-bridge-fallback"
 DEBUG = True
 
 # Feature flags
@@ -750,6 +750,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     elif stage == "warmup" and not plan.get("philosophy_pipeline"):
         # v17.2: skip warmup templates when philosophy intent — route to guidance
         selected_names = []
+        reply_from_pattern = False
         if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
             data = load_patterns()
             pattern = choose_pattern("warmup", context)
@@ -759,6 +760,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 constraints = data.get("global_constraints", {})
                 reply_text = enforce_constraints(reply_text, "warmup", constraints)
                 state["last_bridge_turn"] = turn_index
+                reply_from_pattern = True
             else:
                 system_prompt = load_warmup_prompt()
                 ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
@@ -769,6 +771,16 @@ async def process_user_query(message: Message, user_text: str) -> None:
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             reply_text = postprocess_response(reply_text, stage)
+        # v19.1: bridge/pattern не может быть финальным ответом — LLM fallback
+        if reply_from_pattern and reply_text:
+            rt = (reply_text or "").strip()
+            if len(rt) < 120 and "?" not in rt and "\n\n" not in rt:
+                system_prompt = load_warmup_prompt()
+                ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
+                reply_text = call_openai(system_prompt, user_text, context_block=ctx)
+                reply_text = postprocess_response(reply_text, stage)
+                if DEBUG:
+                    print("[Phi DEBUG] bridge_fallback=ON (pattern too short)")
     else:
         # Guidance: system + линзы (включая philosophy_pipeline при skip warmup)
         if plan.get("philosophy_pipeline"):

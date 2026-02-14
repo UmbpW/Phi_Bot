@@ -36,6 +36,7 @@ def apply_style_guards(text: str) -> str:
     """Удаляет BAN_PHRASES, BAN_DIRECTIVE, NO_DEV_LEXICON, debug tags из текста."""
     if not text or not text.strip():
         return text
+    original = text
     text = DEBUG_TAG_PATTERN.sub("", text).strip()
     lines = text.split("\n")
     result = []
@@ -48,4 +49,6 @@ def apply_style_guards(text: str) -> str:
         if any(word in ln_lower for word in NO_DEV_LEXICON):
             continue
         result.append(ln)
+    if len(result) == 0:
+        return original
     return "\n".join(result).strip()
