@@ -34,6 +34,15 @@ from state_pm import pm_get_profile, pm_record_signal, pm_set_last_suggest_turn
 from philosophy_map import PHILOSOPHY_MAP, pm_score_philosophies
 from prompt_loader import load_file
 from response_postprocess import postprocess_response
+from patterns.pattern_engine import (
+    load_patterns,
+    choose_pattern,
+    render_pattern,
+    enforce_constraints,
+    build_ux_prefix,
+    strip_echo_first_line,
+    get_option_close_line,
+)
 
 BOT_VERSION = "Phi_Bot v11-prod"
 DEBUG = True
@@ -43,6 +52,7 @@ ENABLE_TOOLS_CMD = True
 ENABLE_LENS_CMD = True
 ENABLE_SESSION_CLOSE_CHOICE = True
 ENABLE_PHILOSOPHY_MATCH = True
+ENABLE_PATTERN_ENGINE = True
 PM_MIN_TURNS = 5
 PM_MIN_CONFIDENCE = 0.6
 PM_COOLDOWN_TURNS = 25
@@ -71,6 +81,14 @@ META_LECTURE_PATTERNS = (
 GUIDANCE_TRIGGERS = (
     "что делать", "как быть", "что делать дальше", "помоги решить",
     "что мне делать", "подскажи что", "посоветуй что",
+)
+
+RESISTANCE_TRIGGERS = (
+    "зачем отвечать", "зачем ты", "не хочу отвечать", "не буду отвечать",
+    "зачем это", "не буду",
+)
+CONFUSION_TRIGGERS = (
+    "не понимаю", "запутался", "неясно", "не знаю что", "не понятно",
 )
 
 # Загрузка .env из папки Phi_Bot
@@ -339,12 +357,48 @@ async def process_user_query(message: Message, user_text: str) -> None:
     USER_STAGE[user_id] = stage
 
     mode_tag = None
+    selected_names = []
+    pattern_id = None
+
+    text_lower = (user_text or "").lower()
+    is_resistance = any(tr in text_lower for tr in RESISTANCE_TRIGGERS)
+    is_confusion = any(tr in text_lower for tr in CONFUSION_TRIGGERS)
+    want_fork = detect_financial_pattern(user_text)
+    want_option_close = (
+        ENABLE_SESSION_CLOSE_CHOICE
+        and stage == "guidance"
+        and not (user_text or "").rstrip().endswith("?")
+    )
+    context = {
+        "stage": stage,
+        "is_safety": False,
+        "is_resistance": is_resistance,
+        "is_confusion": is_confusion,
+        "want_fork": want_fork,
+        "want_option_close": want_option_close,
+        "enable_philosophy_match": ENABLE_PHILOSOPHY_MATCH,
+    }
+
     if stage == "warmup":
-        # Warmup: без линз, только зеркало
-        system_prompt = load_warmup_prompt()
         selected_names = []
+        if ENABLE_PATTERN_ENGINE:
+            data = load_patterns()
+            pattern = choose_pattern("warmup", context)
+            if pattern:
+                pattern_id = pattern.get("id", "")
+                reply_text = render_pattern(pattern)
+                constraints = data.get("global_constraints", {})
+                reply_text = enforce_constraints(reply_text, "warmup", constraints)
+            else:
+                system_prompt = load_warmup_prompt()
+                reply_text = call_openai(system_prompt, user_text)
+                reply_text = postprocess_response(reply_text, stage)
+        else:
+            system_prompt = load_warmup_prompt()
+            reply_text = call_openai(system_prompt, user_text)
+            reply_text = postprocess_response(reply_text, stage)
     else:
-        # Guidance: system + линзы + existential limiter
+        # Guidance: system + линзы
         main_prompt = load_system_prompt()
         all_lenses = load_all_lenses()
         if detect_financial_pattern(user_text):
@@ -352,32 +406,39 @@ async def process_user_query(message: Message, user_text: str) -> None:
             mode_tag = "financial_pattern_confusion"
         else:
             selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
-            # lens_general запрещён в guidance — заменяем на control_scope
             if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
                 selected_names = [
                     "lens_control_scope" if n == "lens_general" else n
                     for n in selected_names
                 ]
-                selected_names = list(dict.fromkeys(selected_names))  # dedup, order preserved
+                selected_names = list(dict.fromkeys(selected_names))
         lens_contents = [all_lenses.get(name, "") for name in selected_names]
         lens_contents = [c for c in lens_contents if c]
         system_prompt = build_system_prompt(main_prompt, lens_contents)
-        # Existential limiter: max 2 рамки, ≤2 предложения каждая
         system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
 
-    # Вызов OpenAI
-    reply_text = call_openai(system_prompt, user_text)
+        reply_text = call_openai(system_prompt, user_text)
+        if _is_meta_lecture(reply_text):
+            reply_text = call_openai(system_prompt, user_text, force_short=True)
+        if _is_existential(user_text):
+            reply_text = _trim_existential(reply_text)
+        reply_text = postprocess_response(reply_text, stage)
 
-    # Voice guard: если мета-лекционный тон — перегенерировать
-    if _is_meta_lecture(reply_text):
-        reply_text = call_openai(system_prompt, user_text, force_short=True)
-
-    # Existential limiter: если режим existential → обрезать до 2 рамок
-    if stage == "guidance" and _is_existential(user_text):
-        reply_text = _trim_existential(reply_text)
-
-    # Question limiter: warmup макс 1 вопрос, guidance макс 2
-    reply_text = postprocess_response(reply_text, stage)
+        # Pattern engine: UX prefix + echo stripping (только guidance)
+        if ENABLE_PATTERN_ENGINE:
+            data = load_patterns()
+            constraints = data.get("global_constraints", {})
+            prefix = build_ux_prefix("guidance", context)
+            stripped = strip_echo_first_line(reply_text)
+            if prefix and stripped != reply_text:
+                reply_text = prefix + "\n\n" + stripped
+            elif stripped != reply_text:
+                reply_text = stripped
+            if want_option_close:
+                reply_text = reply_text.rstrip() + "\n\n" + get_option_close_line()
+            reply_text = enforce_constraints(reply_text, "guidance", constraints)
+        else:
+            pass  # session close добавляется ниже общим блоком
 
     # Сохраняем линзы для /lens
     if stage == "guidance" and selected_names:
@@ -393,11 +454,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
     if pm_suggestion:
         reply_text = reply_text.rstrip() + "\n\n" + pm_suggestion
 
-    # Session close choice (только guidance, не при вопросительном сообщении)
+    # Session close choice (уже добавлен в pattern engine для guidance при ENABLE_PATTERN_ENGINE)
     if (
-        ENABLE_SESSION_CLOSE_CHOICE
-        and stage == "guidance"
-        and not (user_text or "").rstrip().endswith("?")
+        want_option_close
+        and not (ENABLE_PATTERN_ENGINE and stage == "guidance")
     ):
         reply_text = reply_text.rstrip() + "\n\nХочешь продолжить: (1) про причины или (2) про следующий шаг?"
 
@@ -406,7 +466,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
     if mode_tag:
         detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
     if DEBUG:
-        reply_text = f"{reply_text}\n\n[mode: {detected_modes} | stage: {stage}]"
+        tail = f"[mode: {detected_modes} | stage: {stage}]"
+        if pattern_id:
+            tail = f"[pattern: {pattern_id}] " + tail
+        reply_text = f"{reply_text}\n\n{tail}"
 
     # Логирование диалога
     log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
