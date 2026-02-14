@@ -59,6 +59,22 @@ LENS_KEYWORDS: dict[str, list[str]] = {
 }
 
 
+# Триггеры финансового режима (route → expectation_gap + control_scope)
+FINANCIAL_PATTERNS = (
+    "зарабатываю много но нет накоплений",
+    "деньги уходят",
+    "не копится",
+    "куда уходят деньги",
+    "высокий доход но нет сбережений",
+)
+
+
+def detect_financial_pattern(text: str) -> bool:
+    """Проверяет финансовый паттерн в тексте."""
+    t = (text or "").lower()
+    return any(p in t for p in FINANCIAL_PATTERNS)
+
+
 def _normalize_text(text: str) -> str:
     """Нормализует текст для поиска: нижний регистр, без лишних символов."""
     text = text.lower().strip()

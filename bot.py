@@ -28,10 +28,10 @@ from prompt_loader import (
     load_system_prompt,
     load_warmup_prompt,
 )
-from router import select_lenses
+from router import select_lenses, detect_financial_pattern
 from safety import check_safety, get_safe_response
 
-BOT_VERSION = "Phi_Bot v8-prod"
+BOT_VERSION = "Phi_Bot v10-prod"
 DEBUG = True
 
 # Stage machine v8: warmup | guidance
@@ -218,6 +218,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     stage = _get_stage(user_id, user_text)
     USER_STAGE[user_id] = stage
 
+    mode_tag = None
     if stage == "warmup":
         # Warmup: без линз, только зеркало
         system_prompt = load_warmup_prompt()
@@ -226,7 +227,18 @@ async def process_user_query(message: Message, user_text: str) -> None:
         # Guidance: system + линзы + existential limiter
         main_prompt = load_system_prompt()
         all_lenses = load_all_lenses()
-        selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
+        if detect_financial_pattern(user_text):
+            selected_names = ["lens_expectation_gap", "lens_control_scope"]
+            mode_tag = "financial_pattern_confusion"
+        else:
+            selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
+            # lens_general запрещён в guidance — заменяем на control_scope
+            if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
+                selected_names = [
+                    "lens_control_scope" if n == "lens_general" else n
+                    for n in selected_names
+                ]
+                selected_names = list(dict.fromkeys(selected_names))  # dedup, order preserved
         lens_contents = [all_lenses.get(name, "") for name in selected_names]
         lens_contents = [c for c in lens_contents if c]
         system_prompt = build_system_prompt(main_prompt, lens_contents)
@@ -246,6 +258,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
 
     # Debug-метка (только при DEBUG=True)
     detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
+    if mode_tag:
+        detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
     if DEBUG:
         reply_text = f"{reply_text}\n\n[mode: {detected_modes} | stage: {stage}]"
 
