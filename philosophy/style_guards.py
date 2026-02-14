@@ -12,6 +12,8 @@ BAN_PHRASES = (
 
 BAN_DIRECTIVE_PHRASES = (
     "давай выберем путь",
+    "выберем направление",
+    "мне важно выбрать",
     "идем по линии",
     "идём по линии",
     "вариант a",
@@ -23,11 +25,18 @@ BAN_DIRECTIVE_PHRASES = (
 
 NO_DEV_LEXICON = ("картечь",)
 
+# v19: debug tags — вычищать перед отправкой
+DEBUG_TAG_PATTERN = re.compile(
+    r"\[(?:pattern|mode|stage|lens):\s*[^\]]*\]",
+    re.IGNORECASE,
+)
+
 
 def apply_style_guards(text: str) -> str:
-    """Удаляет BAN_PHRASES, BAN_DIRECTIVE, NO_DEV_LEXICON из текста."""
+    """Удаляет BAN_PHRASES, BAN_DIRECTIVE, NO_DEV_LEXICON, debug tags из текста."""
     if not text or not text.strip():
         return text
+    text = DEBUG_TAG_PATTERN.sub("", text).strip()
     lines = text.split("\n")
     result = []
     for ln in lines:

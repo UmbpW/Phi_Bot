@@ -3,16 +3,16 @@
 import re
 from typing import Any, Optional
 
-# Ключи философского/когнитивного intent (RU, case-insensitive)
+# v19: блокируем philosophy при этих темах (деньги, тревога — в finance/warmup)
+PHILOSOPHY_INTENT_BLOCK = ("тревог", "тревож", "неопредел", "деньг", "бедност", "богатств")
+
+# v19: суженный philosophy intent — явные философские темы
 PHILOSOPHY_INTENT_KEYS = (
     "нереш",
     "решен",
     "выбор",
     "сомнева",
     "страх",
-    "тревог",
-    "тревож",
-    "неопредел",
     "смысл",
     "зачем жить",
     "как философ",
@@ -22,9 +22,6 @@ PHILOSOPHY_INTENT_KEYS = (
     "франкл",
     "даос",
     "экзист",
-    "деньг",
-    "бедност",
-    "богатств",
     "конфесс",
     "религ",
     "христиан",
@@ -32,19 +29,21 @@ PHILOSOPHY_INTENT_KEYS = (
     "будд",
 )
 
-# Паттерн: вопрос с "как" + (перестать/побороть/научиться) в контексте выбора/страха
+# Паттерн: только выбор/смысл/нерешительность (без тревоги)
 HOW_PATTERN = re.compile(
     r".*(как|что)\s+(перестать|побороть|научиться|сделать).*"
-    r"(выбор|страх|смысл|тревог|тревож|сомнева|нереш)",
+    r"(выбор|смысл|сомнева|нереш)",
     re.IGNORECASE | re.DOTALL,
 )
 
 
 def is_philosophy_intent(text: str) -> bool:
-    """True если вопрос философский/когнитивный (решение, смысл, страх, конфессии и т.д.)."""
+    """True если вопрос философский/когнитивный. v19: блок при тревоге/деньгах."""
     if not text or len(text.strip()) < 4:
         return False
     t = (text or "").lower()
+    if any(k in t for k in PHILOSOPHY_INTENT_BLOCK):
+        return False
     if any(k in t for k in PHILOSOPHY_INTENT_KEYS):
         return True
     if HOW_PATTERN.search(t):

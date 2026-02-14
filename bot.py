@@ -100,7 +100,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v17.2-philosophy-pipeline-priority"
+BOT_VERSION = "Phi_Bot v19-finance-rhythm"
 DEBUG = True
 
 # Feature flags
@@ -128,6 +128,7 @@ LENS_NAMES: dict[str, str] = {
     "lens_control_scope": "Зона контроля",
     "lens_boundary": "Границы",
     "lens_expectation_gap": "Разрыв ожиданий",
+    "lens_finance_rhythm": "Финансовый ритм",
     "lens_role_position": "Роль и позиция",
     "lens_narrative": "Сюжет",
     "lens_mortality_focus": "Время и выбор",
@@ -683,6 +684,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
     plan = governor_plan(user_id, stage, user_text, context, state)
     context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
     context["disable_list_templates"] = plan.get("disable_list_templates", False)
+    # v19: отключить option_close для finance и philosophy
+    if plan.get("philosophy_pipeline") or detect_financial_pattern(user_text):
+        want_option_close = False
     if DEBUG:
         print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
         if plan.get("philosophy_pipeline"):
@@ -716,7 +720,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
             reply_text = "Уточни, пожалуйста — с чего начать?"
         want_option_close = False
     # v17 Philosophy mode: guided_path (lens preview) вместо картечи A/B/C
-    elif plan.get("force_philosophy_mode") and not get_active_lens(state):
+    # v19: длинные сообщения (>250) и финансовые — НЕ показывать preview, идти в LLM
+    elif (
+        plan.get("force_philosophy_mode")
+        and not get_active_lens(state)
+        and len((user_text or "").strip()) <= 250
+        and not detect_financial_pattern(user_text)
+    ):
         selected_names = []
         theme = "default"
         if detect_lens_preview_need(user_text):
@@ -729,6 +739,14 @@ async def process_user_query(message: Message, user_text: str) -> None:
         want_option_close = False
         if DEBUG:
             print("[Phi DEBUG] guided_path=on")
+    elif (
+        plan.get("force_philosophy_mode")
+        and not get_active_lens(state)
+        and (len((user_text or "").strip()) > 250 or detect_financial_pattern(user_text))
+    ):
+        plan["force_philosophy_mode"] = False
+        if DEBUG:
+            print("[Phi DEBUG] guided_path=skip (long/finance) -> guidance LLM")
     elif stage == "warmup" and not plan.get("philosophy_pipeline"):
         # v17.2: skip warmup templates when philosophy intent — route to guidance
         selected_names = []
@@ -774,8 +792,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
             if active_lens and active_lens in LENS_TO_SYSTEM_ID:
                 selected_names = [LENS_TO_SYSTEM_ID[active_lens]]
             elif detect_financial_pattern(user_text):
-                selected_names = ["lens_expectation_gap", "lens_control_scope"]
-                mode_tag = "financial_pattern_confusion"
+                selected_names = ["lens_finance_rhythm"]
+                mode_tag = "financial_rhythm"
             else:
                 selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
                 if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
