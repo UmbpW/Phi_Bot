@@ -33,7 +33,7 @@ def load_patterns(path: str = "dialogue_patterns.yaml") -> dict:
 
 def choose_pattern(stage: str, context: dict) -> Optional[dict]:
     """Выбирает pattern по stage и context flags."""
-    # v21: answer-first — не применять dialogue patterns
+    # v21.3 C) safety override: answer_first → pattern_engine HARD OFF
     if context.get("answer_first_required"):
         return None
     # v17.2: philosophy_pipeline — skip list/bullet/school templates

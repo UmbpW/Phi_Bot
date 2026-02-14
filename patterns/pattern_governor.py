@@ -61,23 +61,26 @@ def is_short_ambiguous(text: str) -> bool:
 
 
 def is_full_question(text: str) -> bool:
-    """v21: содержательный длинный вопрос → answer-first mode."""
+    """v21/v21.3: содержательный вопрос → answer-first mode.
+    Срабатывает если: len > 180 ИЛИ ≥2 маркеров."""
     if not text:
         return False
     t = (text or "").strip()
-    if len(t) < 220:
-        return False
-    signals = [
-        "я зарабатываю",
-        "меня тревожит",
-        "я не понимаю",
-        "внутри",
-        "постоянно",
-        "каждый раз",
-        "ситуация",
-        "проблема",
+    t_lower = t.lower()
+    if len(t) > 180:
+        return True
+    markers = [
+        "как выйти",
+        "что делать",
+        "не получается",
+        "тяжелой",
+        "ситуации",
+        "нет сил",
+        "все плохо",
+        "не вижу выхода",
+        "не понимаю что делать",
     ]
-    hit = sum(1 for s in signals if s in t.lower())
+    hit = sum(1 for m in markers if m in t_lower)
     return hit >= 2
 
 
@@ -89,7 +92,7 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
-    # v21 Answer-First: полноценный вопрос (≥220 символов, ≥2 сигнала)
+    # v21.3 ПЕРВОЕ правило: answer-first перекрывает warmup/uncertainty/small talk
     if is_full_question(user_text):
         return {
             "add_bridge": False,
@@ -108,6 +111,7 @@ def governor_plan(
             "max_practices": 1,
             "max_questions": 1,
         }
+    # ТОЛЬКО ПОСЛЕ answer-first: warmup rules, uncertainty rules, small talk
     # v20.1 Warmup Hard Guard: длинные/финансовые — сразу guidance, без warmup patterns
     text_len = len((user_text or "").strip())
     if text_len > 250:

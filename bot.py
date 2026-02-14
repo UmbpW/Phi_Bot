@@ -121,7 +121,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v21.2-completion-guard"
+BOT_VERSION = "Phi_Bot v21.3-router-priority"
 DEBUG = True
 
 # Feature flags
