@@ -1,5 +1,7 @@
-"""v21.1 Final send clamp: ban-opener + meta-tail hard drop. Последний шаг перед отправкой."""
+"""v21.1 Final send clamp: ban-opener + meta-tail hard drop. Последний шаг перед отправкой.
+v21.2: looks_incomplete + add_closing_sentence (completion guard)."""
 
+import random
 import re
 
 
@@ -62,3 +64,32 @@ def final_send_clamp(
         return text  # fallback: не обнулять ответ
 
     return " ".join(sentences).strip()
+
+
+# v21.2: completion guard — защита от незавершённых ответов
+CLOSING_POOL = [
+    "Иногда достаточно на сегодня вернуть себе один управляемый участок — чтобы снова почувствовать почву под ногами.",
+    "Смысл сейчас не в том, чтобы решить всё разом, а в том, чтобы вернуть себе малую устойчивость в пределах доступного.",
+    "Когда всё кажется монолитом, полезно разделить его на части и начать с той, которая поддаётся.",
+]
+
+
+def looks_incomplete(text: str) -> bool:
+    """Проверяет, выглядит ли ответ незавершённым (обрубленным)."""
+    if not text:
+        return True
+    t = text.strip()
+    if len(t) < 240:  # коротко для "полного вопроса"
+        return True
+    if t[-1] not in ".!?…":
+        return True
+    # защита от "обрубка": последняя строка слишком короткая
+    last = t.split("\n")[-1].strip() if "\n" in t else t
+    if len(last) < 18 and t[-1] != "?":
+        return True
+    return False
+
+
+def add_closing_sentence(text: str) -> str:
+    """Добавляет нейтральное философское закрытие без коуч-лексики и meta-навигации."""
+    return text.rstrip() + "\n\n" + random.choice(CLOSING_POOL)

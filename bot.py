@@ -53,7 +53,11 @@ from state_pm import pm_get_profile, pm_record_signal, pm_set_last_suggest_turn
 from philosophy_map import PHILOSOPHY_MAP, pm_score_philosophies
 from prompt_loader import load_file
 from response_postprocess import postprocess_response
-from utils.final_send_clamp import final_send_clamp
+from utils.final_send_clamp import (
+    add_closing_sentence,
+    final_send_clamp,
+    looks_incomplete,
+)
 from utils.output_sanitizer import sanitize_output
 from utils.send_pipeline import send_text
 from utils.telegram_idempotency import IdempotencyMiddleware
@@ -117,7 +121,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v21.1-opening-polish-multi-style"
+BOT_VERSION = "Phi_Bot v21.2-completion-guard"
 DEBUG = True
 
 # Feature flags
@@ -694,6 +698,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     forbid_practice = False
     injection_this_turn = False
     has_reco = False
+    guidance_ctx_for_completion = None  # v21.2: для completion guard регенерации
 
     text_lower = (user_text or "").lower()
     is_resistance = any(tr in text_lower for tr in RESISTANCE_TRIGGERS)
@@ -888,6 +893,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
 v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философские оптики по теме. Формат: 2–4 предложения на оптику. Без буллетов «Школа: тезис». Без исторических справок. Без практик внутри оптик. Практика (если есть) — одним блоком после оптик. Максимум 3 школы, 1 вопрос, 1 практика."""
 
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
+            guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             raw_len = len(reply_text or "")
             _logger.info(f"[telemetry] llm_len={raw_len}")
@@ -1049,13 +1055,29 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
         print(f"[Phi DEBUG] pattern_id={pattern_id}")
 
     # v21.1: final send clamp — ban-opener + meta-tail hard drop (последний шаг)
-    reply_text = final_send_clamp(
-        reply_text,
-        mode_tag=mode_tag,
-        stage=stage,
-        answer_first_required=plan.get("answer_first_required", False),
-        philosophy_pipeline=plan.get("philosophy_pipeline", False),
-    )
+    # v21.2: completion guard — дописать закрытие или регенерировать при обрубке
+    clamp_kw = {
+        "mode_tag": mode_tag,
+        "stage": stage,
+        "answer_first_required": plan.get("answer_first_required", False),
+        "philosophy_pipeline": plan.get("philosophy_pipeline", False),
+    }
+    reply_text = final_send_clamp(reply_text, **clamp_kw)
+
+    if stage == "guidance" and looks_incomplete(reply_text):
+        reply_text2 = add_closing_sentence(reply_text)
+        reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
+        if looks_incomplete(reply_text2) and guidance_ctx_for_completion:
+            gc = guidance_ctx_for_completion
+            reply_text2 = call_openai(gc["system_prompt"], gc["user_text"], context_block=gc["ctx"])
+            reply_text2 = postprocess_response(
+                reply_text2, stage,
+                philosophy_pipeline=plan.get("philosophy_pipeline", False),
+                mode_tag=mode_tag,
+                answer_first_required=plan.get("answer_first_required", False),
+            )
+            reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
+        reply_text = reply_text2
 
     # Unified send pipeline (sanitize внутри send_text)
     save_state(_state_to_persist())
