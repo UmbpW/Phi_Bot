@@ -3,17 +3,7 @@
 import random
 from typing import Any, Optional
 
-# Триггеры философского вопроса
-PHILOSOPHY_TRIGGERS = (
-    "как философ",
-    "что философ",
-    "философия денег",
-    "как думать о деньгах",
-    "что думал",
-    "стоики",
-    "камю",
-    "франкл",
-)
+from utils.is_philosophy_question import is_philosophy_question as _is_philosophy_question
 
 # Короткие ответы — не переспрашивать "что имел в виду"
 SHORT_AMBIGUOUS = ("оба", "все", "да", "нет", "ок", "окей", "и то и то")
@@ -58,13 +48,8 @@ def resolve_pattern_collisions(context: dict) -> dict:
 
 
 def is_philosophy_question(text: str) -> bool:
-    """True если триггеры философского вопроса или 'философ' в тексте."""
-    if not text or len(text.strip()) < 3:
-        return False
-    t = text.lower().strip()
-    if "философ" in t:
-        return True
-    return any(tr in t for tr in PHILOSOPHY_TRIGGERS)
+    """True если философский вопрос или конфессии (сравнительная антропология)."""
+    return _is_philosophy_question(text)
 
 
 def is_short_ambiguous(text: str) -> bool:

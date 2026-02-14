@@ -13,11 +13,11 @@ async def send_text(
     chat_id: int,
     text: str,
     *,
+    stage: Optional[str] = None,
     parse_mode: Optional[str] = None,
     reply_markup: Optional[Any] = None,
 ) -> Optional["Message"]:
-    """Отправка текста пользователю. sanitize_output — последний шаг перед отправкой.
-    Возвращает Message для edit/delete при необходимости."""
+    """Отправка текста пользователю. sanitize_output — последний шаг перед отправкой."""
     if not text:
         return None
     clean_text = sanitize_output(text)

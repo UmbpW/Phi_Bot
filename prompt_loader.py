@@ -29,6 +29,11 @@ def load_warmup_prompt() -> str:
     return load_file(PROMPTS_DIR / "warmup_prompt_ru.md")
 
 
+def load_philosophy_style() -> str:
+    """Загружает philosophy_style_ru.md (дополнение к system prompt)."""
+    return load_file(PROMPTS_DIR / "philosophy_style_ru.md")
+
+
 def load_all_lenses() -> dict[str, str]:
     """Загружает все markdown-файлы из папки lenses.
 

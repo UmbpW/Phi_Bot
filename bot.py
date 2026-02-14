@@ -6,6 +6,7 @@ Phi Bot — Telegram-бот MVP на aiogram 3.x.
 import asyncio
 import os
 import sys
+from typing import Optional
 import re
 import tempfile
 from pathlib import Path
@@ -28,6 +29,7 @@ from prompt_loader import (
     load_all_lenses,
     load_system_prompt,
     load_warmup_prompt,
+    load_philosophy_style,
 )
 from router import select_lenses, detect_financial_pattern
 from safety import check_safety, get_safe_response
@@ -39,6 +41,8 @@ from utils.output_sanitizer import sanitize_output
 from utils.send_pipeline import send_text
 from utils.telegram_idempotency import IdempotencyMiddleware
 from utils.state_store import load_state, save_state
+from utils.short_ack import is_short_ack
+from utils.context_pack import pack_context, append_history
 from patterns.pattern_engine import (
     load_patterns,
     choose_pattern,
@@ -65,7 +69,7 @@ from patterns.agency_layer import (
 )
 from philosophy.philosophy_responder import respond_philosophy_question
 
-BOT_VERSION = "Phi_Bot v14-stability"
+BOT_VERSION = "Phi_Bot v14-context-philosophy"
 DEBUG = True
 
 # Feature flags
@@ -83,8 +87,9 @@ USER_STAGE: dict[int, str] = {}
 USER_MSG_COUNT: dict[int, int] = {}
 LAST_LENS_BY_USER: dict[int, list[str]] = {}  # последние линзы для /lens
 
-# Governor state v12
-USER_STATE: dict[int, dict] = {}  # turn_index, last_bridge_turn, last_options, last_bridge_category
+# Governor state v12 + pending follow-through v14
+USER_STATE: dict[int, dict] = {}  # turn_index, last_bridge_turn, last_options, pending, ...
+HISTORY_STORE: dict[int, list] = {}  # user_id -> [{"role":"user"|"assistant","content":...}]
 
 # Человекочитаемые названия линз
 LENS_NAMES: dict[str, str] = {
@@ -221,17 +226,25 @@ def _extract_response_text(response) -> str:
     return result or "Не удалось получить ответ."
 
 
-def call_openai(system_prompt: str, user_text: str, force_short: bool = False) -> str:
-    """Вызывает OpenAI Responses API и возвращает текст ответа."""
+def call_openai(
+    system_prompt: str,
+    user_text: str,
+    force_short: bool = False,
+    context_block: str = "",
+) -> str:
+    """Вызывает OpenAI Responses API. context_block — упакованный контекст диалога."""
     model_name = OPENAI_MODEL
     inst = system_prompt
     if force_short:
         inst += "\n\nОтветь короче и разговорнее. Без лекций."
+    input_text = user_text
+    if context_block:
+        input_text = f"[Контекст диалога]\n{context_block}\n\n[Текущее сообщение]\n{user_text}"
     try:
         response = openai_client.responses.create(
             model=model_name,
             instructions=inst,
-            input=user_text,
+            input=input_text,
         )
         return _extract_response_text(response)
     except Exception as e:
@@ -241,7 +254,7 @@ def call_openai(system_prompt: str, user_text: str, force_short: bool = False) -
             response = openai_client.responses.create(
                 model="gpt-5.2-mini",
                 instructions=inst,
-                input=user_text,
+                input=input_text,
             )
             return _extract_response_text(response)
         except Exception as e2:
@@ -274,9 +287,62 @@ def _state_to_persist() -> dict:
             "last_fork_turn": state.get("last_fork_turn", -10),
             "last_bridge_turn": state.get("last_bridge_turn", -10),
             "last_options": state.get("last_options"),
+            "pending": state.get("pending"),
+            "last_user_text": state.get("last_user_text", ""),
+            "last_bot_text": state.get("last_bot_text", ""),
             "last_updated": time.time(),
         }
     return out
+
+
+def _execute_pending_follow_through(
+    user_id: int,
+    user_text: str,
+    state: dict,
+) -> Optional[str]:
+    """Если short_ack + pending активен: выполнить follow-through, вернуть reply_text. Иначе None."""
+    pending = state.get("pending")
+    if not pending:
+        return None
+    created = pending.get("created_turn", 0)
+    if state.get("turn_index", 0) - created > 6:
+        state["pending"] = None
+        return None
+
+    kind = pending.get("kind", "")
+    prompt = pending.get("prompt", "")
+    options = pending.get("options") or []
+    default = pending.get("default") or (options[0] if options else None)
+
+    if kind == "fork":
+        choice = default or (options[0] if options else "option_1")
+        # Короткий ответ по выбранной ветке
+        main_prompt = load_system_prompt()
+        ctx = f"Контекст: {prompt[:200]}. Пользователь выбрал '{choice}'. Дай 2–4 предложения по этой ветке. Без нового вопроса о выборе."
+        reply = call_openai(main_prompt, ctx, force_short=True)
+        reply = postprocess_response(reply, "guidance")
+        state["pending"] = None
+        return reply
+    if kind == "offer_action":
+        # Один микро-шаг по контексту
+        main_prompt = load_system_prompt()
+        ctx = f"Контекст: {prompt[:200]}. Дай 1 конкретный микро-шаг (что сделать сейчас). Максимум 1 вопрос по содержанию."
+        reply = call_openai(main_prompt, ctx, force_short=True)
+        reply = postprocess_response(reply, "guidance")
+        state["pending"] = None
+        return reply
+    if kind == "question":
+        # Продолжить по контексту последнего бота
+        last_bot = state.get("last_bot_text", "")[:300]
+        if last_bot:
+            main_prompt = load_system_prompt()
+            ctx = f"Предыдущий вопрос/предложение бота: {last_bot}. Пользователь согласился. Продолжи диалог — 1 шаг или уточнение."
+            reply = call_openai(main_prompt, ctx, force_short=True)
+            reply = postprocess_response(reply, "guidance")
+            state["pending"] = None
+            return reply
+    state["pending"] = None
+    return None
 
 
 def _load_persisted_state() -> None:
@@ -295,6 +361,9 @@ def _load_persisted_state() -> None:
             "last_options": blob.get("last_options"),
             "guidance_turns_count": blob.get("guidance_turns_count", 0),
             "last_fork_turn": blob.get("last_fork_turn", -10),
+            "pending": blob.get("pending"),
+            "last_user_text": blob.get("last_user_text", ""),
+            "last_bot_text": blob.get("last_bot_text", ""),
         }
 
 
@@ -319,6 +388,9 @@ async def cmd_start(message: Message) -> None:
         "last_options": None,
         "guidance_turns_count": 0,
         "last_fork_turn": -10,
+        "pending": None,
+        "last_user_text": "",
+        "last_bot_text": "",
     }
     save_state(_state_to_persist())
     await send_text(bot, message.chat.id, "Привет! Я Phi Bot — AI-помощник.\nНапишите или наговорите любой вопрос.")
@@ -430,6 +502,32 @@ async def process_user_query(message: Message, user_text: str) -> None:
     # State persistence: загрузить с диска перед обработкой
     _load_persisted_state()
 
+    state = USER_STATE.get(user_id)
+    if not state:
+        USER_STATE[user_id] = {
+            "turn_index": 0,
+            "last_bridge_turn": -10,
+            "last_options": None,
+            "guidance_turns_count": 0,
+            "last_fork_turn": -10,
+            "pending": None,
+            "last_user_text": "",
+            "last_bot_text": "",
+        }
+        state = USER_STATE[user_id]
+
+    # Pending follow-through: short_ack продолжает предыдущий контекст
+    if state and is_short_ack(user_text) and state.get("pending"):
+        reply_text = _execute_pending_follow_through(user_id, user_text, state)
+        if reply_text:
+            append_history(HISTORY_STORE, user_id, "user", user_text)
+            state["last_user_text"] = user_text
+            state["last_bot_text"] = reply_text
+            append_history(HISTORY_STORE, user_id, "assistant", reply_text)
+            save_state(_state_to_persist())
+            await send_text(bot, message.chat.id, reply_text, reply_markup=FEEDBACK_KEYBOARD)
+            return
+
     # Safety-фильтр
     if check_safety(user_text):
         safe_text = get_safe_response()
@@ -450,6 +548,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "last_options": None,
             "guidance_turns_count": 0,
             "last_fork_turn": -10,
+            "pending": None,
+            "last_user_text": "",
+            "last_bot_text": "",
         }
     state = USER_STATE[user_id]
     state["turn_index"] = state.get("turn_index", 0) + 1
@@ -494,12 +595,16 @@ async def process_user_query(message: Message, user_text: str) -> None:
         else:
             reply_text = "Уточни, пожалуйста — с чего начать?"
         want_option_close = False
-    # Philosophy mode: прямой ответ без LLM (без session close)
+    # Philosophy mode: 3 оптики + вопрос A/B/C, pending для follow-through
     elif plan.get("force_philosophy_mode"):
         selected_names = []
-        reply_text = respond_philosophy_question(user_text)
+        reply_text, pending_info = respond_philosophy_question(
+            user_text, {"turn_index": turn_index}
+        )
         reply_text = enforce_constraints(reply_text, "guidance", load_patterns().get("global_constraints", {}))
         want_option_close = False
+        if pending_info:
+            state["pending"] = pending_info
     elif stage == "warmup":
         selected_names = []
         if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
@@ -513,11 +618,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 state["last_bridge_turn"] = turn_index
             else:
                 system_prompt = load_warmup_prompt()
-                reply_text = call_openai(system_prompt, user_text)
+                ctx = pack_context(user_id, state, HISTORY_STORE)
+                reply_text = call_openai(system_prompt, user_text, context_block=ctx)
                 reply_text = postprocess_response(reply_text, stage)
         else:
             system_prompt = load_warmup_prompt()
-            reply_text = call_openai(system_prompt, user_text)
+            ctx = pack_context(user_id, state, HISTORY_STORE)
+            reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             reply_text = postprocess_response(reply_text, stage)
     else:
         # Guidance: system + линзы
@@ -550,10 +657,14 @@ async def process_user_query(message: Message, user_text: str) -> None:
             lens_contents = [c for c in lens_contents if c]
             system_prompt = build_system_prompt(main_prompt, lens_contents)
             system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
+            phi_style = load_philosophy_style()
+            if phi_style:
+                system_prompt += "\n\n---\n" + phi_style
 
-            reply_text = call_openai(system_prompt, user_text)
+            ctx = pack_context(user_id, state, HISTORY_STORE)
+            reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             if _is_meta_lecture(reply_text):
-                reply_text = call_openai(system_prompt, user_text, force_short=True)
+                reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
             if _is_existential(user_text):
                 reply_text = _trim_existential(reply_text)
             reply_text = postprocess_response(reply_text, stage)
@@ -583,11 +694,27 @@ async def process_user_query(message: Message, user_text: str) -> None:
                     reply_text = reply_text.rstrip() + "\n\n" + opt_line
                     state["last_options"] = [opt_line]
                     state["last_fork_turn"] = state["guidance_turns_count"]
+                    state["pending"] = {
+                        "kind": "fork",
+                        "options": ["1", "2"],
+                        "default": "1",
+                        "prompt": opt_line,
+                        "created_turn": turn_index,
+                    }
                 reply_text = enforce_constraints(reply_text, "guidance", constraints)
             else:
                 if want_option_close and not plan.get("disable_option_close") and fork_allowed:
-                    reply_text = reply_text.rstrip() + "\n\n" + get_option_close_line()
+                    opt_line = get_option_close_line()
+                    reply_text = reply_text.rstrip() + "\n\n" + opt_line
+                    state["last_options"] = [opt_line]
                     state["last_fork_turn"] = state["guidance_turns_count"]
+                    state["pending"] = {
+                        "kind": "fork",
+                        "options": ["1", "2"],
+                        "default": "1",
+                        "prompt": opt_line,
+                        "created_turn": turn_index,
+                    }
 
             # Agency debug (guidance only)
             if DEBUG:
@@ -629,6 +756,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
         if mode_tag:
             detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
         print(f"[Phi DEBUG] mode={detected_modes} stage={stage}" + (f" pattern={pattern_id}" if pattern_id else ""))
+
+    # История и last texts для context
+    append_history(HISTORY_STORE, user_id, "user", user_text)
+    append_history(HISTORY_STORE, user_id, "assistant", reply_text)
+    state["last_user_text"] = user_text
+    state["last_bot_text"] = reply_text
 
     # Логирование диалога
     log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
