@@ -1,10 +1,12 @@
 """Загрузка промптов и линз из файлов."""
 
+import logging
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 LENSES_DIR = PROJECT_ROOT / "lenses"
+_logger = logging.getLogger("phi.telemetry")
 
 
 def load_file(path: Path) -> str:
@@ -16,7 +18,11 @@ def load_file(path: Path) -> str:
 
 def load_system_prompt() -> str:
     """Загружает system_prompt_ru.md."""
-    return load_file(PROMPTS_DIR / "system_prompt_ru.md")
+    path = PROMPTS_DIR / "system_prompt_ru.md"
+    if not path.exists():
+        _logger.error("PROMPT_LOAD_FAIL system_prompt_ru.md")
+        return ""
+    return load_file(path)
 
 
 def load_router_rules() -> str:
@@ -44,7 +50,10 @@ def load_all_lenses() -> dict[str, str]:
     if not LENSES_DIR.exists():
         return result
     for path in sorted(LENSES_DIR.glob("*.md")):
-        result[path.stem] = load_file(path)
+        content = load_file(path)
+        if not content or not content.strip():
+            _logger.error(f"LENS_EMPTY {path.stem}")
+        result[path.stem] = content
     return result
 
 

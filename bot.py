@@ -4,12 +4,28 @@ Phi Bot — Telegram-бот MVP на aiogram 3.x.
 """
 
 import asyncio
+import hashlib
+import logging
 import os
 import sys
 from typing import Optional
 import re
 import tempfile
 from pathlib import Path
+
+# v20 telemetry — только server logs
+APP_VERSION = os.getenv("APP_VERSION", "dev")
+GIT_SHA = os.getenv("GIT_SHA", "unknown")
+_logger = logging.getLogger("phi.telemetry")
+if not _logger.handlers:
+    _logger.addHandler(logging.StreamHandler())
+    _logger.setLevel(logging.INFO)
+
+
+def _hash_text(text: str) -> str:
+    if not text:
+        return "none"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -100,7 +116,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v19.1-bridge-fallback"
+BOT_VERSION = "Phi_Bot v20-telemetry"
 DEBUG = True
 
 # Feature flags
@@ -166,6 +182,22 @@ if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не задан в .env")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY не задан в .env")
+
+def _health_payload() -> dict:
+    """v20: /health endpoint payload (только server-side)."""
+    try:
+        sp = load_system_prompt()
+        sp_hash = _hash_text(sp)
+    except Exception:
+        sp_hash = "load_error"
+    return {
+        "status": "ok",
+        "app_version": APP_VERSION,
+        "git_sha": GIT_SHA,
+        "openai_model": os.getenv("OPENAI_MODEL"),
+        "system_prompt_hash": sp_hash,
+    }
+
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -684,6 +716,11 @@ async def process_user_query(message: Message, user_text: str) -> None:
     plan = governor_plan(user_id, stage, user_text, context, state)
     context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
     context["disable_list_templates"] = plan.get("disable_list_templates", False)
+    _logger.info(
+        f"[telemetry] stage={stage} "
+        f"philosophy_pipeline={plan.get('philosophy_pipeline')} "
+        f"force_philosophy={plan.get('force_philosophy_mode')}"
+    )
     # v19: отключить option_close для finance и philosophy
     if plan.get("philosophy_pipeline") or detect_financial_pattern(user_text):
         want_option_close = False
@@ -816,6 +853,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
                     selected_names = list(dict.fromkeys(selected_names))
             lens_contents = [all_lenses.get(name, "") for name in selected_names]
             lens_contents = [c for c in lens_contents if c]
+            _logger.info(f"[telemetry] mode={mode_tag or 'none'} lenses={selected_names}")
             system_prompt = build_system_prompt(main_prompt, lens_contents)
             system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
             phi_style = load_philosophy_style()
@@ -826,6 +864,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
 
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
+            raw_len = len(reply_text or "")
+            _logger.info(f"[telemetry] llm_len={raw_len}")
             if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline"):
                 reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
             # v17: запрещено summary-trimming при stage == guidance
@@ -835,6 +875,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 reply_text, stage,
                 philosophy_pipeline=plan.get("philosophy_pipeline", False),
             )
+            final_len = len(reply_text or "")
+            _logger.info(f"[telemetry] final_len={final_len}")
+            if raw_len > 200 and final_len < 120:
+                _logger.warning("[telemetry] heavy_trim_detected")
 
             # v17 Natural injection: после первого абзаца, при устойчивом паттерне
             injection_this_turn = False
@@ -1042,7 +1086,7 @@ async def _run_export_server() -> None:
         return web.json_response({"dialogs": dialogs, "count": len(dialogs)})
 
     async def health_handler(_: web.Request) -> web.Response:
-        return web.Response(text="ok")
+        return web.json_response(_health_payload())
 
     app = web.Application()
     app.router.add_get("/export", export_handler)
@@ -1098,7 +1142,7 @@ async def main() -> None:
         from aiohttp import web
         app = web.Application()
         app.router.add_get("/", lambda r: web.Response(text="Phi Bot"))
-        app.router.add_get("/health", lambda r: web.Response(text="ok"))
+        app.router.add_get("/health", lambda r: web.json_response(_health_payload()))
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()

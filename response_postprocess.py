@@ -1,6 +1,9 @@
 """Постобработка ответа: ограничение числа вопросов, style guards."""
 
+import logging
 import re
+
+_logger = logging.getLogger("phi.telemetry")
 
 
 def _apply_style_guards(text: str) -> str:
@@ -35,6 +38,7 @@ def postprocess_response(
         if philosophy_pipeline:
             from philosophy.multi_school_blocker import apply_multi_school_blocker
             result = apply_multi_school_blocker(result)
+        _logger.info(f"[telemetry] questions={result.count('?')}")
         return result
 
     # Обрезаем: оставляем содержимое до и включая max_q-й знак вопроса
@@ -48,4 +52,5 @@ def postprocess_response(
     if philosophy_pipeline:
         from philosophy.multi_school_blocker import apply_multi_school_blocker
         result = apply_multi_school_blocker(result)
+    _logger.info(f"[telemetry] questions={result.count('?')}")
     return result
