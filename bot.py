@@ -107,7 +107,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
-OPENAI_MODEL = (os.getenv("OPENAI_MODEL") or "gpt-5.2-codex").strip()
+OPENAI_MODEL = (os.getenv("OPENAI_MODEL") or "gpt-5.2").strip()
 DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 EXPORT_TOKEN = (os.getenv("EXPORT_TOKEN") or "").strip()
 
@@ -190,32 +190,47 @@ def _is_meta_lecture(text: str) -> bool:
     return any(p in t for p in META_LECTURE_PATTERNS)
 
 
+def _extract_response_text(response) -> str:
+    """Извлекает текст из response OpenAI."""
+    if hasattr(response, "output_text") and response.output_text:
+        return str(response.output_text).strip()
+    text_parts = []
+    if hasattr(response, "output") and response.output:
+        for item in response.output:
+            content = getattr(item, "content", None) or []
+            for block in content:
+                text = getattr(block, "text", None)
+                if text:
+                    text_parts.append(str(text))
+    result = "\n".join(text_parts).strip() if text_parts else ""
+    return result or "Не удалось получить ответ."
+
+
 def call_openai(system_prompt: str, user_text: str, force_short: bool = False) -> str:
     """Вызывает OpenAI Responses API и возвращает текст ответа."""
+    model_name = OPENAI_MODEL
     inst = system_prompt
     if force_short:
         inst += "\n\nОтветь короче и разговорнее. Без лекций."
     try:
         response = openai_client.responses.create(
-            model=OPENAI_MODEL,
+            model=model_name,
             instructions=inst,
             input=user_text,
         )
-        # Извлекаем текст: SDK может иметь output_text или output[].content[].text
-        text_parts = []
-        if hasattr(response, "output_text") and response.output_text:
-            return str(response.output_text).strip()
-        if hasattr(response, "output") and response.output:
-            for item in response.output:
-                content = getattr(item, "content", None) or []
-                for block in content:
-                    text = getattr(block, "text", None)
-                    if text:
-                        text_parts.append(str(text))
-        result = "\n".join(text_parts).strip() if text_parts else ""
-        return result or "Не удалось получить ответ."
+        return _extract_response_text(response)
     except Exception as e:
-        return f"Ошибка API: {str(e)}"
+        if DEBUG:
+            print(f"[Phi] model {model_name} failed, fallback to gpt-5.2-mini: {e}")
+        try:
+            response = openai_client.responses.create(
+                model="gpt-5.2-mini",
+                instructions=inst,
+                input=user_text,
+            )
+            return _extract_response_text(response)
+        except Exception as e2:
+            return f"Ошибка API: {str(e2)}"
 
 
 TOOLS_MENU = """Инструменты Phi Bot
@@ -602,6 +617,7 @@ async def _run_export_server() -> None:
 
 async def main() -> None:
     """Запуск бота."""
+    print(f"LLM model: {OPENAI_MODEL}")
     await bot.delete_webhook(drop_pending_updates=True)
     me = await bot.get_me()
     print(f"Подключено к Telegram: @{me.username}")
