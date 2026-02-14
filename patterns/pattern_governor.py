@@ -103,6 +103,7 @@ def governor_plan(
             "stage_override": "guidance",
             "answer_first_required": True,
             "philosophy_pipeline": True,
+            "allow_philosophy_examples": True,
             "max_lenses": 3,
             "max_practices": 1,
             "max_questions": 1,
