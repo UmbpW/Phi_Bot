@@ -44,8 +44,14 @@ from patterns.pattern_engine import (
     strip_echo_first_line,
     get_option_close_line,
 )
+from patterns.pattern_governor import (
+    governor_plan,
+    resolve_pattern_collisions,
+    is_philosophy_question,
+)
+from philosophy.philosophy_responder import respond_philosophy_question
 
-BOT_VERSION = "Phi_Bot v11-prod"
+BOT_VERSION = "Phi_Bot v12-prod"
 DEBUG = True
 
 # Feature flags
@@ -62,6 +68,9 @@ PM_COOLDOWN_TURNS = 25
 USER_STAGE: dict[int, str] = {}
 USER_MSG_COUNT: dict[int, int] = {}
 LAST_LENS_BY_USER: dict[int, list[str]] = {}  # последние линзы для /lens
+
+# Governor state v12
+USER_STATE: dict[int, dict] = {}  # turn_index, last_bridge_turn, last_options, last_bridge_category
 
 # Человекочитаемые названия линз
 LENS_NAMES: dict[str, str] = {
@@ -236,6 +245,7 @@ async def cmd_start(message: Message) -> None:
     uid = message.from_user.id if message.from_user else 0
     USER_STAGE[uid] = "warmup"
     USER_MSG_COUNT[uid] = 0
+    USER_STATE[uid] = {"turn_index": 0, "last_bridge_turn": -10, "last_options": None}
     await message.answer(
         "Привет! Я Phi Bot — AI-помощник.\n"
         "Напишите или наговорите любой вопрос."
@@ -357,6 +367,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
     stage = _get_stage(user_id, user_text)
     USER_STAGE[user_id] = stage
 
+    # Governor state v12
+    if user_id not in USER_STATE:
+        USER_STATE[user_id] = {"turn_index": 0, "last_bridge_turn": -10, "last_options": None}
+    state = USER_STATE[user_id]
+    state["turn_index"] = state.get("turn_index", 0) + 1
+    turn_index = state["turn_index"]
+
     mode_tag = None
     selected_names = []
     pattern_id = None
@@ -379,10 +396,32 @@ async def process_user_query(message: Message, user_text: str) -> None:
         "want_option_close": want_option_close,
         "enable_philosophy_match": ENABLE_PHILOSOPHY_MATCH,
     }
+    context = resolve_pattern_collisions(context)
+    plan = governor_plan(user_id, stage, user_text, context, state)
+    if DEBUG:
+        print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
 
-    if stage == "warmup":
+    # Короткий ответ "оба"/"да"/"нет" + есть last_options: повторить варианты
+    if plan.get("force_repeat_options") and state.get("last_options"):
         selected_names = []
-        if ENABLE_PATTERN_ENGINE:
+        opts = state["last_options"]
+        if isinstance(opts, list) and len(opts) >= 2:
+            reply_text = "Ок, начнём с (1), потом перейдём к (2). С какого?"
+        elif opts:
+            line = opts[0] if isinstance(opts, list) else opts
+            reply_text = f"Ок. {line} — с какого начнём?"
+        else:
+            reply_text = "Уточни, пожалуйста — с чего начать?"
+        want_option_close = False
+    # Philosophy mode: прямой ответ без LLM (без session close)
+    elif plan.get("force_philosophy_mode"):
+        selected_names = []
+        reply_text = respond_philosophy_question(user_text)
+        reply_text = enforce_constraints(reply_text, "guidance", load_patterns().get("global_constraints", {}))
+        want_option_close = False
+    elif stage == "warmup":
+        selected_names = []
+        if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
             data = load_patterns()
             pattern = choose_pattern("warmup", context)
             if pattern:
@@ -390,6 +429,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 reply_text = render_pattern(pattern)
                 constraints = data.get("global_constraints", {})
                 reply_text = enforce_constraints(reply_text, "warmup", constraints)
+                state["last_bridge_turn"] = turn_index
             else:
                 system_prompt = load_warmup_prompt()
                 reply_text = call_openai(system_prompt, user_text)
@@ -426,20 +466,26 @@ async def process_user_query(message: Message, user_text: str) -> None:
         reply_text = postprocess_response(reply_text, stage)
 
         # Pattern engine: UX prefix + echo stripping (только guidance)
-        if ENABLE_PATTERN_ENGINE:
+        if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
             data = load_patterns()
             constraints = data.get("global_constraints", {})
-            prefix = build_ux_prefix("guidance", context)
+            prefix, bridge_cat = build_ux_prefix("guidance", context, state) if plan.get("add_bridge") else (None, None)
+            if bridge_cat:
+                state["last_bridge_category"] = bridge_cat
+                state["last_bridge_turn"] = turn_index
             stripped = strip_echo_first_line(reply_text)
             if prefix and stripped != reply_text:
                 reply_text = prefix + "\n\n" + stripped
             elif stripped != reply_text:
                 reply_text = stripped
-            if want_option_close:
-                reply_text = reply_text.rstrip() + "\n\n" + get_option_close_line()
+            if want_option_close and not plan.get("disable_option_close"):
+                opt_line = get_option_close_line()
+                reply_text = reply_text.rstrip() + "\n\n" + opt_line
+                state["last_options"] = [opt_line]
             reply_text = enforce_constraints(reply_text, "guidance", constraints)
         else:
-            pass  # session close добавляется ниже общим блоком
+            if want_option_close and not plan.get("disable_option_close"):
+                reply_text = reply_text.rstrip() + "\n\n" + get_option_close_line()
 
     # Сохраняем линзы для /lens
     if stage == "guidance" and selected_names:
@@ -450,10 +496,11 @@ async def process_user_query(message: Message, user_text: str) -> None:
         mode_id = mode_tag or ("existential" if _is_existential(user_text) else None)
         pm_record_signal(user_id, lens_ids=selected_names, mode_id=mode_id)
 
-    # Philosophy Match: мягкая подсказка (до session close choice)
-    pm_suggestion = _maybe_suggest_philosophy_match(user_id, stage, is_safety=False)
-    if pm_suggestion:
-        reply_text = reply_text.rstrip() + "\n\n" + pm_suggestion
+    # Philosophy Match: мягкая подсказка (пропуск при force_philosophy_mode)
+    if not plan.get("force_philosophy_mode"):
+        pm_suggestion = _maybe_suggest_philosophy_match(user_id, stage, is_safety=False)
+        if pm_suggestion:
+            reply_text = reply_text.rstrip() + "\n\n" + pm_suggestion
 
     # Session close choice (уже добавлен в pattern engine для guidance при ENABLE_PATTERN_ENGINE)
     if (
@@ -474,6 +521,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
 
     # Логирование диалога (с тегами для debug)
     log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
+    if DEBUG and pattern_id:
+        print(f"[Phi DEBUG] pattern_id={pattern_id}")
 
     # Отправка ответа: sanitize убирает debug-теги из пользовательского текста
     await message.answer(sanitize_output(reply_text), reply_markup=FEEDBACK_KEYBOARD)

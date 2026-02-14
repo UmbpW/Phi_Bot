@@ -132,8 +132,8 @@ def enforce_constraints(
         filtered_lines.append(ln)
     text = "\n".join(filtered_lines)
 
-    # 2) question limits
-    max_q = q_limits.get(stage, 2)
+    # 2) question limits (строго)
+    max_q = 1 if stage == "warmup" else min(2, q_limits.get(stage, 2))
     parts = re.split(r"([?？])", text)
     q_positions = [i for i, p in enumerate(parts) if p in ("?", "？")]
     if len(q_positions) > max_q:
@@ -160,6 +160,29 @@ def enforce_constraints(
 
 ECHO_OPENING_STARTS = ("слышу", "похоже", "ты хочешь", "тебя беспокоит", "тебя тревожит")
 
+# Bridge variety pool по категориям (избегаем повторения)
+BRIDGE_BY_CATEGORY = {
+    "load": [
+        "С таким фоном тяжело долго держаться.",
+        "Такой груз непросто носить одному.",
+        "С таким давлением трудно оставаться спокойным.",
+    ],
+    "fatigue": [
+        "Когда сил мало — каждое решение даётся тяжело.",
+        "Когда внутри много напряжения — это выматывает.",
+        "Такой фон может сильно изматывать.",
+    ],
+    "irritation": [
+        "С таким раздражением непросто сосредоточиться.",
+        "С этим трудно оставаться собранным.",
+    ],
+    "uncertainty": [
+        "Когда нет ясности — опора теряется.",
+        "В таком состоянии легко накрутиться.",
+    ],
+}
+BRIDGE_CATEGORIES = list(BRIDGE_BY_CATEGORY.keys())
+
 
 def _starts_with_echo(text: str) -> bool:
     """Проверяет, начинается ли первая строка с echo-opening."""
@@ -167,37 +190,24 @@ def _starts_with_echo(text: str) -> bool:
     return any(first_line.startswith(phrase) for phrase in ECHO_OPENING_STARTS)
 
 
-def build_ux_prefix(stage: str, context: dict) -> Optional[str]:
-    """Возвращает bridge_line для добавления перед model output. Для warmup — только bridge без вопроса."""
+def build_ux_prefix(stage: str, context: dict, state: Optional[dict] = None):
+    """Возвращает (bridge_line, chosen_category). Не повторяет last_bridge_category."""
+    state = state or {}
+    last_cat = state.get("last_bridge_category")
+    available = [c for c in BRIDGE_CATEGORIES if c != last_cat] or BRIDGE_CATEGORIES
+    cat = random.choice(available)
+    opts = BRIDGE_BY_CATEGORY.get(cat, [])
+    if opts:
+        return random.choice(opts), cat
+    # fallback to YAML
     data = load_patterns()
     patterns = data.get("patterns", [])
-    if not patterns:
-        return None
-
-    if stage == "warmup":
-        # W3 — только bridge_line без вопроса
-        for p in patterns:
-            if p.get("id") == "W3_non_clinical_empathy":
-                templates = p.get("templates", {}).get("bridge_line", [])
-                if templates:
-                    return random.choice(templates)
-        # fallback: W1 bridge_line
-        for p in patterns:
-            if p.get("id") == "W1_human_bridge_opening":
-                templates = p.get("templates", {}).get("bridge_line", [])
-                if templates:
-                    return random.choice(templates)
-        return None
-
-    if stage == "guidance":
-        for p in patterns:
-            if p.get("id") == "W1_human_bridge_opening":
-                templates = p.get("templates", {}).get("bridge_line", [])
-                if templates:
-                    return random.choice(templates)
-        return None
-
-    return None
+    for p in patterns:
+        if p.get("id") in ("W3_non_clinical_empathy", "W1_human_bridge_opening"):
+            templates = p.get("templates", {}).get("bridge_line", [])
+            if templates:
+                return random.choice(templates), cat
+    return None, None
 
 
 def strip_echo_first_line(text: str) -> str:
