@@ -5,12 +5,13 @@ Phi Bot — Telegram-бот MVP на aiogram 3.x.
 
 import asyncio
 import os
+import re
 import tempfile
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -23,6 +24,9 @@ from prompt_loader import (
 )
 from router import select_lenses
 from safety import check_safety, get_safe_response
+
+BOT_VERSION = "Phi_Bot v8-prod"
+DEBUG = True
 
 # Stage machine v8: warmup | guidance
 USER_STAGE: dict[int, str] = {}
@@ -91,6 +95,30 @@ def _get_stage(user_id: int, user_text: str) -> str:
     return "guidance"
 
 
+EXISTENTIAL_KEYWORDS = (
+    "бессмыслен", "пустота", "пусто", "экзистенциальн", "зачем жить",
+    "выгоран", "перегруз", "ничего не хочу", "нет сил", "устал от всего",
+)
+
+
+def _is_existential(user_text: str) -> bool:
+    """Проверяет экзистенциальный контекст запроса."""
+    t = (user_text or "").lower()
+    return any(kw in t for kw in EXISTENTIAL_KEYWORDS)
+
+
+def _trim_existential(text: str) -> str:
+    """Ограничение: не более 2 философских рамок, каждая ≤2 предложения."""
+    if not text:
+        return text
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    result = []
+    for block in blocks[:2]:
+        sentences = re.split(r"(?<=[.!?])\s+", block)[:2]
+        result.append(" ".join(s.strip() for s in sentences if s.strip()))
+    return "\n\n".join(result) if result else text
+
+
 def _is_meta_lecture(text: str) -> bool:
     """Проверяет мета-лекционный тон."""
     if not text or len(text) < 100:
@@ -129,6 +157,15 @@ def call_openai(system_prompt: str, user_text: str, force_short: bool = False) -
         return f"Ошибка API: {str(e)}"
 
 
+ABOUT_TEXT = (
+    "Этот бот — секулярный философский агент поддержки.\n"
+    "Он помогает размышлять и находить опору через философские рамки и вопросы.\n\n"
+    "Это не психотерапия и не медицинская помощь.\n"
+    "Если у вас кризисное состояние или риск причинить себе вред — важно обратиться к живому специалисту или в местные службы помощи.\n\n"
+    "Бот работает в тестовом режиме."
+)
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     """Приветствие по /start."""
@@ -139,6 +176,18 @@ async def cmd_start(message: Message) -> None:
         "Привет! Я Phi Bot — AI-помощник.\n"
         "Напишите или наговорите любой вопрос."
     )
+
+
+@dp.message(Command("about"))
+async def cmd_about(message: Message) -> None:
+    """Дисклеймер и описание бота."""
+    await message.answer(ABOUT_TEXT)
+
+
+@dp.message(Command("version"))
+async def cmd_version(message: Message) -> None:
+    """Версия бота."""
+    await message.answer(BOT_VERSION)
 
 
 async def process_user_query(message: Message, user_text: str) -> None:
@@ -182,6 +231,15 @@ async def process_user_query(message: Message, user_text: str) -> None:
     # Voice guard: если мета-лекционный тон — перегенерировать
     if _is_meta_lecture(reply_text):
         reply_text = call_openai(system_prompt, user_text, force_short=True)
+
+    # Existential limiter: если режим existential → обрезать до 2 рамок
+    if stage == "guidance" and _is_existential(user_text):
+        reply_text = _trim_existential(reply_text)
+
+    # Debug-метка (только при DEBUG=True)
+    detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
+    if DEBUG:
+        reply_text = f"{reply_text}\n\n[mode: {detected_modes} | stage: {stage}]"
 
     # Логирование диалога
     log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
