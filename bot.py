@@ -30,6 +30,9 @@ from prompt_loader import (
 )
 from router import select_lenses, detect_financial_pattern
 from safety import check_safety, get_safe_response
+from state_pm import pm_get_profile, pm_record_signal, pm_set_last_suggest_turn
+from philosophy_map import PHILOSOPHY_MAP, pm_score_philosophies
+from prompt_loader import load_file
 
 BOT_VERSION = "Phi_Bot v10-prod"
 DEBUG = True
@@ -38,6 +41,10 @@ DEBUG = True
 ENABLE_TOOLS_CMD = True
 ENABLE_LENS_CMD = True
 ENABLE_SESSION_CLOSE_CHOICE = True
+ENABLE_PHILOSOPHY_MATCH = True
+PM_MIN_TURNS = 5
+PM_MIN_CONFIDENCE = 0.6
+PM_COOLDOWN_TURNS = 25
 
 # Stage machine v8: warmup | guidance
 USER_STAGE: dict[int, str] = {}
@@ -266,6 +273,50 @@ async def cmd_lens(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+@dp.message(Command("philosophy"))
+async def cmd_philosophy(message: Message) -> None:
+    """Лучшая философия по текущему профилю или «мало сигналов»."""
+    if not ENABLE_PHILOSOPHY_MATCH:
+        await message.answer("Функция отключена.")
+        return
+    uid = message.from_user.id if message.from_user else 0
+    profile = pm_get_profile(uid)
+    pid, conf = pm_score_philosophies(profile)
+    if not pid or conf < PM_MIN_CONFIDENCE:
+        await message.answer("Пока мало сигналов — продолжим диалог.")
+        return
+    card_path = PROJECT_ROOT / PHILOSOPHY_MAP[pid]["card"]
+    text = load_file(card_path) if card_path.exists() else ""
+    if not text:
+        await message.answer("Пока мало сигналов — продолжим диалог.")
+        return
+    await message.answer("Кажется, тебе может откликнуться такая оптика:\n\n" + text)
+
+
+def _maybe_suggest_philosophy_match(
+    user_id: int,
+    stage: str,
+    is_safety: bool,
+):
+    """Возвращает текст подсказки философской оптики или None."""
+    if not ENABLE_PHILOSOPHY_MATCH or stage != "guidance" or is_safety:
+        return None
+    profile = pm_get_profile(user_id)
+    if profile["turns"] < PM_MIN_TURNS:
+        return None
+    if profile["turns"] - profile.get("last_suggest_turn", 0) < PM_COOLDOWN_TURNS:
+        return None
+    pid, conf = pm_score_philosophies(profile)
+    if not pid or conf < PM_MIN_CONFIDENCE:
+        return None
+    card_path = PROJECT_ROOT / PHILOSOPHY_MAP[pid]["card"]
+    text = load_file(card_path) if card_path.exists() else ""
+    if not text:
+        return None
+    pm_set_last_suggest_turn(user_id, profile["turns"])
+    return "Кажется, тебе может откликнуться такая философская оптика:\n\n" + text
+
+
 async def process_user_query(message: Message, user_text: str) -> None:
     """Обрабатывает текст пользователя (общая логика для текста и голоса)."""
     user_id = message.from_user.id if message.from_user else 0
@@ -327,6 +378,16 @@ async def process_user_query(message: Message, user_text: str) -> None:
     # Сохраняем линзы для /lens
     if stage == "guidance" and selected_names:
         LAST_LENS_BY_USER[user_id] = selected_names
+
+    # Philosophy Match: запись сигналов
+    if stage == "guidance":
+        mode_id = mode_tag or ("existential" if _is_existential(user_text) else None)
+        pm_record_signal(user_id, lens_ids=selected_names, mode_id=mode_id)
+
+    # Philosophy Match: мягкая подсказка (до session close choice)
+    pm_suggestion = _maybe_suggest_philosophy_match(user_id, stage, is_safety=False)
+    if pm_suggestion:
+        reply_text = reply_text.rstrip() + "\n\n" + pm_suggestion
 
     # Session close choice (только guidance, не при вопросительном сообщении)
     if (
