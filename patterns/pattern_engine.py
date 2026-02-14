@@ -176,7 +176,15 @@ def enforce_constraints(
 
 ECHO_OPENING_STARTS = ("слышу", "похоже", "ты хочешь", "тебя беспокоит", "тебя тревожит")
 
-# Bridge variety pool по категориям (избегаем повторения)
+# v20.2: thematic bridge pool — для financial_rhythm и philosophy_pipeline (НЕ empathy)
+THEMATIC_BRIDGE = [
+    "Можно посмотреть на это через одну простую рамку.",
+    "Есть один полезный угол взгляда.",
+    "Разделение помогает снизить внутренний шум.",
+    "Не всё здесь в зоне контроля, но часть — точно да.",
+]
+
+# Bridge variety pool по категориям (избегаем повторения) — empathy-style, не для finance/philosophy
 BRIDGE_BY_CATEGORY = {
     "load": [
         "С таким фоном тяжело долго держаться.",
@@ -207,8 +215,13 @@ def _starts_with_echo(text: str) -> bool:
 
 
 def build_ux_prefix(stage: str, context: dict, state: Optional[dict] = None):
-    """Возвращает (bridge_line, chosen_category). Не повторяет last_bridge_category."""
+    """Возвращает (bridge_line, chosen_category). Не повторяет last_bridge_category.
+    v20.2: financial_rhythm / philosophy_pipeline → THEMATIC_BRIDGE, не empathy pool."""
     state = state or {}
+    mode_tag = context.get("mode_tag")
+    is_theme_mode = mode_tag == "financial_rhythm" or context.get("philosophy_pipeline")
+    if is_theme_mode and THEMATIC_BRIDGE:
+        return random.choice(THEMATIC_BRIDGE), "thematic"
     last_cat = state.get("last_bridge_category")
     available = [c for c in BRIDGE_CATEGORIES if c != last_cat] or BRIDGE_CATEGORIES
     cat = random.choice(available)

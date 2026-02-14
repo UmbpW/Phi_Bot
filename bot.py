@@ -116,7 +116,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v20.1-warmup-hard-guard"
+BOT_VERSION = "Phi_Bot v20.2-thematic-bridge-meta-tail"
 DEBUG = True
 
 # Feature flags
@@ -882,6 +882,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
             reply_text = postprocess_response(
                 reply_text, stage,
                 philosophy_pipeline=plan.get("philosophy_pipeline", False),
+                mode_tag=mode_tag,
             )
             final_len = len(reply_text or "")
             _logger.info(f"[telemetry] final_len={final_len}")
@@ -924,6 +925,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
 
             # Pattern engine: UX prefix + echo stripping (только guidance)
             fork_allowed = fork_density_guard(user_id, state)
+            context["mode_tag"] = mode_tag  # v20.2: thematic bridge for finance/philosophy
             if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
                 data = load_patterns()
                 constraints = data.get("global_constraints", {})
