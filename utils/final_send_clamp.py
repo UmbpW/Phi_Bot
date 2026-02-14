@@ -93,3 +93,64 @@ def looks_incomplete(text: str) -> bool:
 def add_closing_sentence(text: str) -> str:
     """Добавляет нейтральное философское закрытие без коуч-лексики и meta-навигации."""
     return text.rstrip() + "\n\n" + random.choice(CLOSING_POOL)
+
+
+# v21.4: meta-tail-to-fork/close — замена хвоста мета-фраз на fork или закрытие
+META_TAIL_ENDINGS = (
+    "чтобы не давать пустых советов",
+    "важно понять",
+    "нужно понять",
+    "хочу понять",
+    "давай уточним",
+    "уточни, пожалуйста",
+    "расскажи подробнее",
+)
+
+FINANCE_CLOSE_POOL = [
+    "Иногда достаточно на сегодня вернуть себе один управляемый участок — чтобы снова почувствовать почву под ногами.",
+    "Смысл сейчас не в том, чтобы решить всё разом, а в том, чтобы вернуть себе малую устойчивость в пределах доступного.",
+    "Когда всё кажется монолитом, полезно разделить его на части и начать с той, которая поддаётся.",
+]
+
+GENERAL_FORK_POOL = [
+    "Что сейчас сильнее всего тянет вниз: усталость/выгорание, здоровье, или ощущение, что всё разваливается сразу?",
+    "Это больше про нехватку сил или про то, что не видно направления?",
+    "Главнее сейчас вернуть силы или вернуть ясность?",
+]
+
+
+def ends_with_meta_tail(text: str) -> bool:
+    """Проверяет, заканчивается ли ответ мета-фразой в последних ~220 символах."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    tail = t[-220:]
+    return any(x in tail for x in META_TAIL_ENDINGS)
+
+
+def strip_last_meta_sentence(text: str) -> str:
+    """Убрать последнее предложение (грубое удаление мета-хвоста)."""
+    s = (text or "").strip()
+    parts = re.split(r"(?<=[.!?…])\s+", s)
+    if len(parts) <= 1:
+        return s
+    return " ".join(parts[:-1]).strip()
+
+
+def meta_tail_to_fork_or_close(
+    text: str,
+    mode_tag: str | None = None,
+    max_questions: int = 1,
+) -> str:
+    """Если ответ заканчивается мета-фразой — заменить на fork или закрытие.
+    Fork если вопросов ещё нет, иначе — закрывающую фразу."""
+    if not text or not text.strip():
+        return text
+    if not ends_with_meta_tail(text):
+        return text
+
+    base = strip_last_meta_sentence(text)
+    q_count = base.count("?")
+    if q_count < max_questions:
+        return (base + "\n\n" + random.choice(GENERAL_FORK_POOL)).strip()
+    return (base + "\n\n" + random.choice(FINANCE_CLOSE_POOL)).strip()

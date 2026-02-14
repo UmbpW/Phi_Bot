@@ -57,6 +57,7 @@ from utils.final_send_clamp import (
     add_closing_sentence,
     final_send_clamp,
     looks_incomplete,
+    meta_tail_to_fork_or_close,
 )
 from utils.output_sanitizer import sanitize_output
 from utils.send_pipeline import send_text
@@ -121,7 +122,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v21.3-router-priority"
+BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 DEBUG = True
 
 # Feature flags
@@ -1078,6 +1079,13 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
             )
             reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
         reply_text = reply_text2
+
+    # v21.4: meta-tail-to-fork/close — последний шаг перед send (fix unfinished endings)
+    reply_text = meta_tail_to_fork_or_close(
+        reply_text,
+        mode_tag=mode_tag,
+        max_questions=plan.get("max_questions", 1),
+    )
 
     # Unified send pipeline (sanitize внутри send_text)
     save_state(_state_to_persist())
