@@ -116,7 +116,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v20-telemetry"
+BOT_VERSION = "Phi_Bot v20.1-warmup-hard-guard"
 DEBUG = True
 
 # Feature flags
@@ -705,6 +705,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     )
     context = {
         "stage": stage,
+        "user_text_len": len((user_text or "").strip()),
         "is_safety": False,
         "is_resistance": is_resistance,
         "is_confusion": is_confusion,
@@ -714,6 +715,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
     }
     context = resolve_pattern_collisions(context)
     plan = governor_plan(user_id, stage, user_text, context, state)
+    if plan.get("stage_override"):
+        stage = plan["stage_override"]
+        USER_STAGE[user_id] = stage
+        # v20.1 Turn 1 finance route: lock lens_finance_rhythm на первом ходу
+        if turn_index == 1 and detect_financial_pattern(user_text):
+            set_active_lens(state, "lens_finance_rhythm")
+    context["stage"] = stage
     context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
     context["disable_list_templates"] = plan.get("disable_list_templates", False)
     _logger.info(

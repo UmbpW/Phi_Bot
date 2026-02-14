@@ -36,6 +36,9 @@ def choose_pattern(stage: str, context: dict) -> Optional[dict]:
     # v17.2: philosophy_pipeline — skip list/bullet/school templates
     if context.get("philosophy_pipeline") or context.get("disable_list_templates"):
         return None
+    # v20.1: длинный текст — не применять warmup patterns (C2 и т.д.)
+    if stage == "warmup" and context.get("user_text_len", 0) > 250:
+        return None
     data = load_patterns()
     patterns = data.get("patterns", [])
     if not patterns:

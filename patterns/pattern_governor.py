@@ -3,6 +3,7 @@
 import random
 from typing import Any, Optional
 
+from router import detect_financial_pattern
 from utils.is_philosophy_question import is_philosophy_question as _is_philosophy_question
 from utils.intent_gate import is_philosophy_intent as _is_philosophy_intent
 
@@ -67,6 +68,29 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
+    # v20.1 Warmup Hard Guard: длинные/финансовые — сразу guidance, без warmup patterns
+    text_len = len((user_text or "").strip())
+    if text_len > 250:
+        return {
+            "add_bridge": False,
+            "disable_pattern_engine": True,
+            "disable_option_close": True,
+            "disable_fork": False,
+            "force_philosophy_mode": False,
+            "force_repeat_options": False,
+            "stage_override": "guidance",
+        }
+    if detect_financial_pattern(user_text):
+        return {
+            "add_bridge": False,
+            "disable_pattern_engine": True,
+            "disable_option_close": True,
+            "disable_fork": False,
+            "force_philosophy_mode": False,
+            "force_repeat_options": False,
+            "stage_override": "guidance",
+        }
+
     ctx = resolve_pattern_collisions(context)
 
     plan = {

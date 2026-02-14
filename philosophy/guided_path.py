@@ -96,6 +96,7 @@ LENS_TO_SYSTEM_ID = {
     "control_buffer": "lens_control_scope",
     "sufficiency_bounds": "lens_boundary",
     "reproducible_ability": "lens_micro_agency",
+    "lens_finance_rhythm": "lens_finance_rhythm",  # v20.1 Turn 1 finance lock
 }
 
 
