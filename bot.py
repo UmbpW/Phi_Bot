@@ -43,6 +43,8 @@ from utils.telegram_idempotency import IdempotencyMiddleware
 from utils.state_store import load_state, save_state
 from utils.short_ack import is_short_ack
 from utils.context_pack import pack_context, append_history
+from utils.intent_gate import should_skip_warmup_first_turn
+from philosophy.first_turn_templates import render_first_turn_philosophy
 from patterns.pattern_engine import (
     load_patterns,
     choose_pattern,
@@ -69,7 +71,7 @@ from patterns.agency_layer import (
 )
 from philosophy.philosophy_responder import respond_philosophy_question
 
-BOT_VERSION = "Phi_Bot v14-context-philosophy"
+BOT_VERSION = "Phi_Bot v15-first-turn-gate"
 DEBUG = True
 
 # Feature flags
@@ -533,6 +535,29 @@ async def process_user_query(message: Message, user_text: str) -> None:
         safe_text = get_safe_response()
         await send_text(bot, message.chat.id, safe_text)
         log_safety_event(user_id, user_text)
+        return
+
+    # First Turn Philosophy Gate v15: философский intent → answer-first, без generic warmup
+    history_count = len(HISTORY_STORE.get(user_id, []))
+    current_stage = USER_STAGE.get(user_id)
+    if should_skip_warmup_first_turn(state, user_text, history_count, current_stage):
+        gate_text, intent_label = render_first_turn_philosophy(user_text)
+        gate_text = enforce_constraints(
+            gate_text, "guidance", load_patterns().get("global_constraints", {})
+        )
+        USER_STAGE[user_id] = "guidance"
+        USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
+        state["turn_index"] = state.get("turn_index", 0) + 1
+        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
+        append_history(HISTORY_STORE, user_id, "user", user_text)
+        append_history(HISTORY_STORE, user_id, "assistant", gate_text)
+        state["last_user_text"] = user_text
+        state["last_bot_text"] = gate_text
+        log_dialog(user_id, user_text, [], gate_text)
+        save_state(_state_to_persist())
+        if DEBUG:
+            print(f"[Phi DEBUG] first_turn_gate=ON intent={intent_label}")
+        await send_text(bot, message.chat.id, gate_text, reply_markup=FEEDBACK_KEYBOARD)
         return
 
     # Stage machine v8
