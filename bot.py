@@ -5,6 +5,7 @@ Phi Bot — Telegram-бот MVP на aiogram 3.x.
 
 import asyncio
 import os
+import sys
 import re
 import tempfile
 from pathlib import Path
@@ -670,6 +671,25 @@ async def _run_export_server() -> None:
     print(f"Export server: PORT={port} /export?token=...")
 
 
+async def _daily_backup_task() -> None:
+    """Ежедневное сохранение логов (если BACKUP_DAILY=1)."""
+    import subprocess
+    backup_script = PROJECT_ROOT / "scripts" / "backup_logs_daily.py"
+    while True:
+        await asyncio.sleep(86400)  # 24 ч
+        if backup_script.exists():
+            try:
+                subprocess.run(
+                    [sys.executable, str(backup_script)],
+                    cwd=str(PROJECT_ROOT),
+                    capture_output=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                if DEBUG:
+                    print(f"[Phi] backup error: {e}")
+
+
 async def main() -> None:
     """Запуск бота."""
     print(f"LLM model: {OPENAI_MODEL}")
@@ -684,6 +704,11 @@ async def main() -> None:
     port = int(os.getenv("PORT", "0"))
     if port > 0 and DATABASE_URL and EXPORT_TOKEN:
         asyncio.create_task(_run_export_server())
+
+    # Ежедневный бэкап логов (BACKUP_DAILY=1, локальный запуск)
+    if os.getenv("BACKUP_DAILY", "").strip() == "1":
+        asyncio.create_task(_daily_backup_task())
+        print("[Phi] Daily backup enabled (exports/dialogs_YYYY-MM-DD.json)")
     elif port > 0:
         # Railway web требует listen на PORT — заглушка если нет DB
         from aiohttp import web
