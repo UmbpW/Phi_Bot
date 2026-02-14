@@ -24,10 +24,12 @@ def _clamp_max_one_question(text: str) -> str:
     return text
 
 
-def _apply_style_guards(text: str, ban_empathy_openers: bool = False) -> str:
-    """v17: удаление BAN_PHRASES и directive/meta-фраз. v20.2: ban_empathy_openers для finance/philosophy."""
+def _apply_style_guards(text: str, ban_empathy_openers: bool = False, answer_first: bool = False) -> str:
+    """v17: удаление BAN_PHRASES и directive/meta-фраз.
+    v20.2: ban_empathy_openers для finance/philosophy.
+    v21: answer_first — extended meta tail ban, empathy opener ban."""
     from philosophy.style_guards import apply_style_guards as _guard
-    return _guard(text, ban_empathy_openers=ban_empathy_openers)
+    return _guard(text, ban_empathy_openers=ban_empathy_openers, answer_first=answer_first)
 
 
 def postprocess_response(
@@ -35,19 +37,26 @@ def postprocess_response(
     stage: str,
     philosophy_pipeline: bool = False,
     mode_tag: str | None = None,
+    answer_first_required: bool = False,
 ) -> str:
     """Ограничивает количество вопросов в ответе.
 
     v20.2: max 1 вопрос (sentence-level clamp), ban empathy openers для finance/philosophy.
+    v21: answer_first — practice clamp, meta tail ban, empathy opener ban.
     """
     if not text or not text.strip():
         return text
 
+    # v21: practice clamp — только первая практика
+    if answer_first_required:
+        from philosophy.practice_cooldown import clamp_to_first_practice_only
+        text = clamp_to_first_practice_only(text)
+
     # v20.2: max 1 question — keep first sentence with '?', drop all later
     text = _clamp_max_one_question(text)
 
-    ban_empathy = mode_tag == "financial_rhythm" or philosophy_pipeline
-    result = _apply_style_guards(text, ban_empathy_openers=ban_empathy)
+    ban_empathy = mode_tag == "financial_rhythm" or philosophy_pipeline or answer_first_required
+    result = _apply_style_guards(text, ban_empathy_openers=ban_empathy, answer_first=answer_first_required)
 
     if philosophy_pipeline:
         from philosophy.multi_school_blocker import apply_multi_school_blocker

@@ -116,7 +116,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v20.2-thematic-bridge-meta-tail"
+BOT_VERSION = "Phi_Bot v21-answer-first"
 DEBUG = True
 
 # Feature flags
@@ -721,9 +721,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
         # v20.1 Turn 1 finance route: lock lens_finance_rhythm на первом ходу
         if turn_index == 1 and detect_financial_pattern(user_text):
             set_active_lens(state, "lens_finance_rhythm")
+    if plan.get("answer_first_required"):
+        _logger.info("[telemetry] answer_first=True")
     context["stage"] = stage
     context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
     context["disable_list_templates"] = plan.get("disable_list_templates", False)
+    context["answer_first_required"] = plan.get("answer_first_required", False)
     _logger.info(
         f"[telemetry] stage={stage} "
         f"philosophy_pipeline={plan.get('philosophy_pipeline')} "
@@ -843,6 +846,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
             )
             want_option_close = False
         else:
+            raw_llm_text = ""  # v21: length guard fallback
             main_prompt = load_system_prompt()
             all_lenses = load_all_lenses()
             active_lens = get_active_lens(state)
@@ -852,13 +856,16 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 selected_names = ["lens_finance_rhythm"]
                 mode_tag = "financial_rhythm"
             else:
-                selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
+                max_lenses = plan.get("max_lenses", 3) if plan.get("answer_first_required") else 3
+                selected_names = select_lenses(user_text, all_lenses, max_lenses=max_lenses)
                 if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
                     selected_names = [
                         "lens_control_scope" if n == "lens_general" else n
                         for n in selected_names
                     ]
                     selected_names = list(dict.fromkeys(selected_names))
+                if plan.get("answer_first_required"):
+                    selected_names = selected_names[:3]
             lens_contents = [all_lenses.get(name, "") for name in selected_names]
             lens_contents = [c for c in lens_contents if c]
             _logger.info(f"[telemetry] mode={mode_tag or 'none'} lenses={selected_names}")
@@ -879,10 +886,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
             # v17: запрещено summary-trimming при stage == guidance
             if _is_existential(user_text) and stage != "guidance":
                 reply_text = _trim_existential(reply_text)
+            raw_llm_text = reply_text
             reply_text = postprocess_response(
                 reply_text, stage,
                 philosophy_pipeline=plan.get("philosophy_pipeline", False),
                 mode_tag=mode_tag,
+                answer_first_required=plan.get("answer_first_required", False),
             )
             final_len = len(reply_text or "")
             _logger.info(f"[telemetry] final_len={final_len}")
@@ -965,10 +974,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
                         "created_turn": turn_index,
                     }
 
-            # Agency debug (guidance only)
-            if DEBUG:
-                questions_removed = not should_ask_question(user_id, state)
-                print(f"[Phi DEBUG] agency: fork_allowed={fork_allowed} questions_removed={questions_removed}")
+            # v21: length guard — если ответ < 180 символов, вернуть raw LLM (без pattern/bridge)
+            if plan.get("answer_first_required") and len(reply_text or "") < 180 and raw_llm_text:
+                reply_text = raw_llm_text
 
     # Сохраняем линзы для /lens
     if stage == "guidance" and selected_names:

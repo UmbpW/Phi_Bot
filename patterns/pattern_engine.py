@@ -33,6 +33,9 @@ def load_patterns(path: str = "dialogue_patterns.yaml") -> dict:
 
 def choose_pattern(stage: str, context: dict) -> Optional[dict]:
     """Выбирает pattern по stage и context flags."""
+    # v21: answer-first — не применять dialogue patterns
+    if context.get("answer_first_required"):
+        return None
     # v17.2: philosophy_pipeline — skip list/bullet/school templates
     if context.get("philosophy_pipeline") or context.get("disable_list_templates"):
         return None
@@ -216,10 +219,15 @@ def _starts_with_echo(text: str) -> bool:
 
 def build_ux_prefix(stage: str, context: dict, state: Optional[dict] = None):
     """Возвращает (bridge_line, chosen_category). Не повторяет last_bridge_category.
-    v20.2: financial_rhythm / philosophy_pipeline → THEMATIC_BRIDGE, не empathy pool."""
+    v20.2: financial_rhythm / philosophy_pipeline → THEMATIC_BRIDGE.
+    v21: answer_first_required → thematic only, empathy disabled."""
     state = state or {}
     mode_tag = context.get("mode_tag")
-    is_theme_mode = mode_tag == "financial_rhythm" or context.get("philosophy_pipeline")
+    is_theme_mode = (
+        mode_tag == "financial_rhythm"
+        or context.get("philosophy_pipeline")
+        or context.get("answer_first_required")
+    )
     if is_theme_mode and THEMATIC_BRIDGE:
         return random.choice(THEMATIC_BRIDGE), "thematic"
     last_cat = state.get("last_bridge_category")

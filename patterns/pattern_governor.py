@@ -60,6 +60,27 @@ def is_short_ambiguous(text: str) -> bool:
     return t in SHORT_AMBIGUOUS or (len(t) <= 3 and t.isalpha())
 
 
+def is_full_question(text: str) -> bool:
+    """v21: содержательный длинный вопрос → answer-first mode."""
+    if not text:
+        return False
+    t = (text or "").strip()
+    if len(t) < 220:
+        return False
+    signals = [
+        "я зарабатываю",
+        "меня тревожит",
+        "я не понимаю",
+        "внутри",
+        "постоянно",
+        "каждый раз",
+        "ситуация",
+        "проблема",
+    ]
+    hit = sum(1 for s in signals if s in t.lower())
+    return hit >= 2
+
+
 def governor_plan(
     user_id: int,
     stage: str,
@@ -68,6 +89,24 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
+    # v21 Answer-First: полноценный вопрос (≥220 символов, ≥2 сигнала)
+    if is_full_question(user_text):
+        return {
+            "add_bridge": False,
+            "disable_pattern_engine": True,
+            "disable_option_close": True,
+            "disable_fork": False,
+            "disable_warmup": True,
+            "disable_empathy_bridge": True,
+            "force_philosophy_mode": False,
+            "force_repeat_options": False,
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "philosophy_pipeline": True,
+            "max_lenses": 3,
+            "max_practices": 1,
+            "max_questions": 1,
+        }
     # v20.1 Warmup Hard Guard: длинные/финансовые — сразу guidance, без warmup patterns
     text_len = len((user_text or "").strip())
     if text_len > 250:

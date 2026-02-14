@@ -40,6 +40,25 @@ def contains_practice(text: str) -> bool:
     return any(p in t for p in ("попробуй выписать", "отметь один пункт", "микро-практика"))
 
 
+def clamp_to_first_practice_only(text: str) -> str:
+    """v21: оставить только ПЕРВУЮ практику, остальные удалить."""
+    if not text or not text.strip():
+        return text
+    if not contains_practice(text):
+        return text
+    paragraphs = text.split("\n\n")
+    result = []
+    practice_included = False
+    for para in paragraphs:
+        if contains_practice(para):
+            if not practice_included:
+                result.append(para)
+                practice_included = True
+            continue
+        result.append(para)
+    return "\n\n".join(result).strip()
+
+
 def tick_practice_cooldown(state: dict) -> None:
     """Уменьшить practice_cooldown_turns на 1 (мин 0)."""
     v = state.get("practice_cooldown_turns", 0)
