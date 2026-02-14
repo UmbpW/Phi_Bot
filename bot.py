@@ -49,9 +49,19 @@ from patterns.pattern_governor import (
     resolve_pattern_collisions,
     is_philosophy_question,
 )
+from patterns.agency_layer import (
+    strip_meta_format_questions,
+    term_example_first,
+    should_ask_question,
+    fork_density_guard,
+    handle_i_dont_understand,
+    is_term_question,
+    remove_questions,
+    replace_clarifying_with_example,
+)
 from philosophy.philosophy_responder import respond_philosophy_question
 
-BOT_VERSION = "Phi_Bot v12-prod"
+BOT_VERSION = "Phi_Bot v13-agency"
 DEBUG = True
 
 # Feature flags
@@ -260,7 +270,13 @@ async def cmd_start(message: Message) -> None:
     uid = message.from_user.id if message.from_user else 0
     USER_STAGE[uid] = "warmup"
     USER_MSG_COUNT[uid] = 0
-    USER_STATE[uid] = {"turn_index": 0, "last_bridge_turn": -10, "last_options": None}
+    USER_STATE[uid] = {
+        "turn_index": 0,
+        "last_bridge_turn": -10,
+        "last_options": None,
+        "guidance_turns_count": 0,
+        "last_fork_turn": -10,
+    }
     await message.answer(
         "Привет! Я Phi Bot — AI-помощник.\n"
         "Напишите или наговорите любой вопрос."
@@ -384,7 +400,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
 
     # Governor state v12
     if user_id not in USER_STATE:
-        USER_STATE[user_id] = {"turn_index": 0, "last_bridge_turn": -10, "last_options": None}
+        USER_STATE[user_id] = {
+            "turn_index": 0,
+            "last_bridge_turn": -10,
+            "last_options": None,
+            "guidance_turns_count": 0,
+            "last_fork_turn": -10,
+        }
     state = USER_STATE[user_id]
     state["turn_index"] = state.get("turn_index", 0) + 1
     turn_index = state["turn_index"]
@@ -455,52 +477,78 @@ async def process_user_query(message: Message, user_text: str) -> None:
             reply_text = postprocess_response(reply_text, stage)
     else:
         # Guidance: system + линзы
-        main_prompt = load_system_prompt()
-        all_lenses = load_all_lenses()
-        if detect_financial_pattern(user_text):
-            selected_names = ["lens_expectation_gap", "lens_control_scope"]
-            mode_tag = "financial_pattern_confusion"
-        else:
-            selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
-            if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
-                selected_names = [
-                    "lens_control_scope" if n == "lens_general" else n
-                    for n in selected_names
-                ]
-                selected_names = list(dict.fromkeys(selected_names))
-        lens_contents = [all_lenses.get(name, "") for name in selected_names]
-        lens_contents = [c for c in lens_contents if c]
-        system_prompt = build_system_prompt(main_prompt, lens_contents)
-        system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
+        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
 
-        reply_text = call_openai(system_prompt, user_text)
-        if _is_meta_lecture(reply_text):
-            reply_text = call_openai(system_prompt, user_text, force_short=True)
-        if _is_existential(user_text):
-            reply_text = _trim_existential(reply_text)
-        reply_text = postprocess_response(reply_text, stage)
-
-        # Pattern engine: UX prefix + echo stripping (только guidance)
-        if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
-            data = load_patterns()
-            constraints = data.get("global_constraints", {})
-            prefix, bridge_cat = build_ux_prefix("guidance", context, state) if plan.get("add_bridge") else (None, None)
-            if bridge_cat:
-                state["last_bridge_category"] = bridge_cat
-                state["last_bridge_turn"] = turn_index
-            stripped = strip_echo_first_line(reply_text)
-            if prefix and stripped != reply_text:
-                reply_text = prefix + "\n\n" + stripped
-            elif stripped != reply_text:
-                reply_text = stripped
-            if want_option_close and not plan.get("disable_option_close"):
-                opt_line = get_option_close_line()
-                reply_text = reply_text.rstrip() + "\n\n" + opt_line
-                state["last_options"] = [opt_line]
-            reply_text = enforce_constraints(reply_text, "guidance", constraints)
+        # Agency v13: term question — сразу пример, без LLM/fork
+        term = is_term_question(user_text)
+        if term:
+            user_context = {"user_text": user_text}
+            reply_text = term_example_first(term, user_context)
+            reply_text = enforce_constraints(
+                reply_text, "guidance", load_patterns().get("global_constraints", {})
+            )
+            want_option_close = False
         else:
-            if want_option_close and not plan.get("disable_option_close"):
-                reply_text = reply_text.rstrip() + "\n\n" + get_option_close_line()
+            main_prompt = load_system_prompt()
+            all_lenses = load_all_lenses()
+            if detect_financial_pattern(user_text):
+                selected_names = ["lens_expectation_gap", "lens_control_scope"]
+                mode_tag = "financial_pattern_confusion"
+            else:
+                selected_names = select_lenses(user_text, all_lenses, max_lenses=3)
+                if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
+                    selected_names = [
+                        "lens_control_scope" if n == "lens_general" else n
+                        for n in selected_names
+                    ]
+                    selected_names = list(dict.fromkeys(selected_names))
+            lens_contents = [all_lenses.get(name, "") for name in selected_names]
+            lens_contents = [c for c in lens_contents if c]
+            system_prompt = build_system_prompt(main_prompt, lens_contents)
+            system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
+
+            reply_text = call_openai(system_prompt, user_text)
+            if _is_meta_lecture(reply_text):
+                reply_text = call_openai(system_prompt, user_text, force_short=True)
+            if _is_existential(user_text):
+                reply_text = _trim_existential(reply_text)
+            reply_text = postprocess_response(reply_text, stage)
+
+            # Agency v13: handle "не понимаю" и answer>ask (guidance only)
+            if handle_i_dont_understand(user_text):
+                reply_text = replace_clarifying_with_example(reply_text)
+            if not should_ask_question(user_id, state):
+                reply_text = remove_questions(reply_text)
+
+            # Pattern engine: UX prefix + echo stripping (только guidance)
+            fork_allowed = fork_density_guard(user_id, state)
+            if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
+                data = load_patterns()
+                constraints = data.get("global_constraints", {})
+                prefix, bridge_cat = build_ux_prefix("guidance", context, state) if plan.get("add_bridge") else (None, None)
+                if bridge_cat:
+                    state["last_bridge_category"] = bridge_cat
+                    state["last_bridge_turn"] = turn_index
+                stripped = strip_echo_first_line(reply_text)
+                if prefix and stripped != reply_text:
+                    reply_text = prefix + "\n\n" + stripped
+                elif stripped != reply_text:
+                    reply_text = stripped
+                if want_option_close and not plan.get("disable_option_close") and fork_allowed:
+                    opt_line = get_option_close_line()
+                    reply_text = reply_text.rstrip() + "\n\n" + opt_line
+                    state["last_options"] = [opt_line]
+                    state["last_fork_turn"] = state["guidance_turns_count"]
+                reply_text = enforce_constraints(reply_text, "guidance", constraints)
+            else:
+                if want_option_close and not plan.get("disable_option_close") and fork_allowed:
+                    reply_text = reply_text.rstrip() + "\n\n" + get_option_close_line()
+                    state["last_fork_turn"] = state["guidance_turns_count"]
+
+            # Agency debug (guidance only)
+            if DEBUG:
+                questions_removed = not should_ask_question(user_id, state)
+                print(f"[Phi DEBUG] agency: fork_allowed={fork_allowed} questions_removed={questions_removed}")
 
     # Сохраняем линзы для /lens
     if stage == "guidance" and selected_names:
@@ -523,6 +571,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
         and not (ENABLE_PATTERN_ENGINE and stage == "guidance")
     ):
         reply_text = reply_text.rstrip() + "\n\nХочешь продолжить: (1) про причины или (2) про следующий шаг?"
+
+    # Agency v13: strip meta format questions (warmup/guidance only, not safety)
+    meta_stripped = 0
+    if stage in ("warmup", "guidance"):
+        reply_text, meta_stripped = strip_meta_format_questions(reply_text)
+    if DEBUG and stage in ("warmup", "guidance"):
+        print(f"[Phi DEBUG] agency: meta_questions_stripped={meta_stripped}")
 
     # Debug-метка (только при DEBUG=True)
     detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
