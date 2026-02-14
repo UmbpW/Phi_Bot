@@ -33,8 +33,9 @@ from safety import check_safety, get_safe_response
 from state_pm import pm_get_profile, pm_record_signal, pm_set_last_suggest_turn
 from philosophy_map import PHILOSOPHY_MAP, pm_score_philosophies
 from prompt_loader import load_file
+from response_postprocess import postprocess_response
 
-BOT_VERSION = "Phi_Bot v10-prod"
+BOT_VERSION = "Phi_Bot v11-prod"
 DEBUG = True
 
 # Feature flags
@@ -374,6 +375,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
     # Existential limiter: если режим existential → обрезать до 2 рамок
     if stage == "guidance" and _is_existential(user_text):
         reply_text = _trim_existential(reply_text)
+
+    # Question limiter: warmup макс 1 вопрос, guidance макс 2
+    reply_text = postprocess_response(reply_text, stage)
 
     # Сохраняем линзы для /lens
     if stage == "guidance" and selected_names:
