@@ -33,6 +33,9 @@ def load_patterns(path: str = "dialogue_patterns.yaml") -> dict:
 
 def choose_pattern(stage: str, context: dict) -> Optional[dict]:
     """Выбирает pattern по stage и context flags."""
+    # v17.2: philosophy_pipeline — skip list/bullet/school templates
+    if context.get("philosophy_pipeline") or context.get("disable_list_templates"):
+        return None
     data = load_patterns()
     patterns = data.get("patterns", [])
     if not patterns:
@@ -85,19 +88,26 @@ def choose_pattern(stage: str, context: dict) -> Optional[dict]:
     return None
 
 
-def render_pattern(pattern: dict) -> str:
+def render_pattern(pattern: dict, context: Optional[dict] = None) -> str:
     """Собирает текст из structure и случайных template строк."""
     if not pattern:
         return ""
+    ctx = context or {}
     structure = pattern.get("structure", [])
     templates = pattern.get("templates", {})
+    # v17.2: philosophy_pipeline — no bullets, no list-style
+    skip_bullets = ctx.get("philosophy_pipeline") or ctx.get("disable_list_templates")
     parts = []
     for key in structure:
+        if skip_bullets and key == "bullets":
+            continue
         opts = templates.get(key)
         if not opts:
             continue
         if isinstance(opts, list):
             if key == "bullets":
+                if skip_bullets:
+                    continue
                 n = min(3, max(2, len(opts)))
                 chosen = random.sample(opts, n) if len(opts) >= n else opts
                 parts.extend(chosen)

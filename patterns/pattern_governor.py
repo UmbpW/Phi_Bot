@@ -1,9 +1,10 @@
-"""Pattern Governor v12: cooldowns, collision resolution, philosophy routing."""
+"""Pattern Governor v12 + v17.2: cooldowns, philosophy pipeline priority."""
 
 import random
 from typing import Any, Optional
 
 from utils.is_philosophy_question import is_philosophy_question as _is_philosophy_question
+from utils.intent_gate import is_philosophy_intent as _is_philosophy_intent
 
 # Короткие ответы — не переспрашивать "что имел в виду"
 SHORT_AMBIGUOUS = ("оба", "все", "да", "нет", "ок", "окей", "и то и то")
@@ -80,9 +81,13 @@ def governor_plan(
     if is_short_ambiguous(user_text) and state.get("last_options"):
         plan["force_repeat_options"] = True
 
-    if is_philosophy_question(user_text):
+    # v17.2 Philosophy Pipeline Priority: is_philosophy_intent (broader) до pattern_engine
+    if _is_philosophy_intent(user_text) or _is_philosophy_question(user_text):
+        plan["philosophy_pipeline"] = True
         plan["force_philosophy_mode"] = True
         plan["disable_pattern_engine"] = True
+        plan["disable_short_templates"] = True
+        plan["disable_list_templates"] = True
 
     if stage == "guidance" and ctx.get("want_fork"):
         plan["disable_option_close"] = True

@@ -9,7 +9,11 @@ def _apply_style_guards(text: str) -> str:
     return _guard(text)
 
 
-def postprocess_response(text: str, stage: str) -> str:
+def postprocess_response(
+    text: str,
+    stage: str,
+    philosophy_pipeline: bool = False,
+) -> str:
     """Ограничивает количество вопросов в ответе по stage.
 
     - warmup: максимум 1 вопрос
@@ -27,7 +31,11 @@ def postprocess_response(text: str, stage: str) -> str:
 
     max_q = 1 if stage == "warmup" else 2
     if q_count <= max_q:
-        return _apply_style_guards(text)
+        result = _apply_style_guards(text)
+        if philosophy_pipeline:
+            from philosophy.multi_school_blocker import apply_multi_school_blocker
+            result = apply_multi_school_blocker(result)
+        return result
 
     # Обрезаем: оставляем содержимое до и включая max_q-й знак вопроса
     last_q_idx = q_positions[max_q - 1]
@@ -36,6 +44,8 @@ def postprocess_response(text: str, stage: str) -> str:
     # Убираем висящие союзы/частицы в конце
     truncated = re.sub(r"\s+[иИ\sаА\s]+$", "", truncated)
     result = truncated.strip()
-    # v17 style guards
     result = _apply_style_guards(result)
+    if philosophy_pipeline:
+        from philosophy.multi_school_blocker import apply_multi_school_blocker
+        result = apply_multi_school_blocker(result)
     return result

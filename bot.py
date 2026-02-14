@@ -100,7 +100,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v17.1-recommendation-pause"
+BOT_VERSION = "Phi_Bot v17.2-philosophy-pipeline-priority"
 DEBUG = True
 
 # Feature flags
@@ -681,8 +681,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
     }
     context = resolve_pattern_collisions(context)
     plan = governor_plan(user_id, stage, user_text, context, state)
+    context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
+    context["disable_list_templates"] = plan.get("disable_list_templates", False)
     if DEBUG:
         print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
+        if plan.get("philosophy_pipeline"):
+            print("[Phi DEBUG] philosophy_pipeline=ON")
 
     # v17 Lens choice: после lens preview пользователь выбрал линию → lock
     last_preview = state.get("last_lens_preview_turn")
@@ -725,14 +729,15 @@ async def process_user_query(message: Message, user_text: str) -> None:
         want_option_close = False
         if DEBUG:
             print("[Phi DEBUG] guided_path=on")
-    elif stage == "warmup":
+    elif stage == "warmup" and not plan.get("philosophy_pipeline"):
+        # v17.2: skip warmup templates when philosophy intent — route to guidance
         selected_names = []
         if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
             data = load_patterns()
             pattern = choose_pattern("warmup", context)
             if pattern:
                 pattern_id = pattern.get("id", "")
-                reply_text = render_pattern(pattern)
+                reply_text = render_pattern(pattern, context)
                 constraints = data.get("global_constraints", {})
                 reply_text = enforce_constraints(reply_text, "warmup", constraints)
                 state["last_bridge_turn"] = turn_index
@@ -747,7 +752,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             reply_text = postprocess_response(reply_text, stage)
     else:
-        # Guidance: system + линзы
+        # Guidance: system + линзы (включая philosophy_pipeline при skip warmup)
+        if plan.get("philosophy_pipeline"):
+            USER_STAGE[user_id] = "guidance"
+            stage = "guidance"
         state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
 
         # Agency v13: term question — сразу пример, без LLM/fork
@@ -783,15 +791,20 @@ async def process_user_query(message: Message, user_text: str) -> None:
             phi_style = load_philosophy_style()
             if phi_style:
                 system_prompt += "\n\n---\n" + phi_style
+            if plan.get("philosophy_pipeline"):
+                system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
 
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-            if _is_meta_lecture(reply_text):
+            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline"):
                 reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
             # v17: запрещено summary-trimming при stage == guidance
             if _is_existential(user_text) and stage != "guidance":
                 reply_text = _trim_existential(reply_text)
-            reply_text = postprocess_response(reply_text, stage)
+            reply_text = postprocess_response(
+                reply_text, stage,
+                philosophy_pipeline=plan.get("philosophy_pipeline", False),
+            )
 
             # v17 Natural injection: после первого абзаца, при устойчивом паттерне
             injection_this_turn = False
