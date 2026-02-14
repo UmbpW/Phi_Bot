@@ -2,10 +2,13 @@
 
 import re
 
+# Любые теги вида [pattern: ...], [mode: ...], [stage: ...], [lens: ...], [debug: ...]
 DEBUG_TAG_PATTERN = re.compile(
     r"\[(pattern|mode|stage|lens|debug)[^\]]*\]",
     re.IGNORECASE,
 )
+# Fallback: [word: ...] или [word | ...] — на случай новых debug-тегов (не [1], [2])
+ANY_TAG_PATTERN = re.compile(r"\[\w+[\s:][^\]]*\]")
 
 
 def sanitize_output(text: str) -> str:
@@ -23,6 +26,7 @@ def sanitize_output(text: str) -> str:
 
     # удалить inline debug теги
     text = DEBUG_TAG_PATTERN.sub("", text)
+    text = ANY_TAG_PATTERN.sub("", text)
 
     # схлопнуть двойные пробелы (не newlines)
     text = re.sub(r" +", " ", text)

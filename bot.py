@@ -36,6 +36,9 @@ from philosophy_map import PHILOSOPHY_MAP, pm_score_philosophies
 from prompt_loader import load_file
 from response_postprocess import postprocess_response
 from utils.output_sanitizer import sanitize_output
+from utils.send_pipeline import send_text
+from utils.telegram_idempotency import IdempotencyMiddleware
+from utils.state_store import load_state, save_state
 from patterns.pattern_engine import (
     load_patterns,
     choose_pattern,
@@ -62,7 +65,7 @@ from patterns.agency_layer import (
 )
 from philosophy.philosophy_responder import respond_philosophy_question
 
-BOT_VERSION = "Phi_Bot v13-agency"
+BOT_VERSION = "Phi_Bot v14-stability"
 DEBUG = True
 
 # Feature flags
@@ -129,6 +132,7 @@ if not OPENAI_API_KEY:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
+dp.update.outer_middleware(IdempotencyMiddleware())
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Кнопки фидбека
@@ -256,6 +260,44 @@ TOOLS_MENU = """Инструменты Phi Bot
 Напиши: «хочу инструмент 2» — и я разверну его."""
 
 
+def _state_to_persist() -> dict:
+    """Собрать state для сохранения на диск."""
+    import time
+    out = {}
+    for uid, state in USER_STATE.items():
+        stage = USER_STAGE.get(uid, "warmup")
+        out[str(uid)] = {
+            "stage": stage,
+            "msg_count": USER_MSG_COUNT.get(uid, 0),
+            "turn_index": state.get("turn_index", 0),
+            "guidance_turns_count": state.get("guidance_turns_count", 0),
+            "last_fork_turn": state.get("last_fork_turn", -10),
+            "last_bridge_turn": state.get("last_bridge_turn", -10),
+            "last_options": state.get("last_options"),
+            "last_updated": time.time(),
+        }
+    return out
+
+
+def _load_persisted_state() -> None:
+    """Загрузить state с диска в USER_STATE, USER_STAGE, USER_MSG_COUNT."""
+    data = load_state()
+    for uid_str, blob in data.items():
+        try:
+            uid = int(uid_str)
+        except (ValueError, TypeError):
+            continue
+        USER_STAGE[uid] = blob.get("stage", "warmup")
+        USER_MSG_COUNT[uid] = blob.get("msg_count", 0)
+        USER_STATE[uid] = {
+            "turn_index": blob.get("turn_index", 0),
+            "last_bridge_turn": blob.get("last_bridge_turn", -10),
+            "last_options": blob.get("last_options"),
+            "guidance_turns_count": blob.get("guidance_turns_count", 0),
+            "last_fork_turn": blob.get("last_fork_turn", -10),
+        }
+
+
 ABOUT_TEXT = (
     "Этот бот — секулярный философский агент поддержки.\n"
     "Он помогает размышлять и находить опору через философские рамки и вопросы.\n\n"
@@ -278,38 +320,36 @@ async def cmd_start(message: Message) -> None:
         "guidance_turns_count": 0,
         "last_fork_turn": -10,
     }
-    await message.answer(
-        "Привет! Я Phi Bot — AI-помощник.\n"
-        "Напишите или наговорите любой вопрос."
-    )
+    save_state(_state_to_persist())
+    await send_text(bot, message.chat.id, "Привет! Я Phi Bot — AI-помощник.\nНапишите или наговорите любой вопрос.")
 
 
 @dp.message(Command("about"))
 async def cmd_about(message: Message) -> None:
     """Дисклеймер и описание бота."""
-    await message.answer(ABOUT_TEXT)
+    await send_text(bot, message.chat.id, ABOUT_TEXT)
 
 
 @dp.message(Command("version"))
 async def cmd_version(message: Message) -> None:
     """Версия бота."""
-    await message.answer(BOT_VERSION)
+    await send_text(bot, message.chat.id, BOT_VERSION)
 
 
 @dp.message(Command("tools"))
 async def cmd_tools(message: Message) -> None:
     """Меню инструментов (6 пунктов)."""
     if not ENABLE_TOOLS_CMD:
-        await message.answer("Команда отключена.")
+        await send_text(bot, message.chat.id, "Команда отключена.")
         return
-    await message.answer(TOOLS_MENU)
+    await send_text(bot, message.chat.id, TOOLS_MENU)
 
 
 @dp.message(Command("lens"))
 async def cmd_lens(message: Message) -> None:
     """Текущая линза, stage, альтернативы."""
     if not ENABLE_LENS_CMD:
-        await message.answer("Команда отключена.")
+        await send_text(bot, message.chat.id, "Команда отключена.")
         return
     uid = message.from_user.id if message.from_user else 0
     stage = USER_STAGE.get(uid, "—")
@@ -332,27 +372,27 @@ async def cmd_lens(message: Message) -> None:
         f"Stage: {stage}",
         f"Альтернативы: {', '.join(alts[:2])}",
     ]
-    await message.answer("\n".join(lines))
+    await send_text(bot, message.chat.id, "\n".join(lines))
 
 
 @dp.message(Command("philosophy"))
 async def cmd_philosophy(message: Message) -> None:
     """Лучшая философия по текущему профилю или «мало сигналов»."""
     if not ENABLE_PHILOSOPHY_MATCH:
-        await message.answer("Функция отключена.")
+        await send_text(bot, message.chat.id, "Функция отключена.")
         return
     uid = message.from_user.id if message.from_user else 0
     profile = pm_get_profile(uid)
     pid, conf = pm_score_philosophies(profile)
     if not pid or conf < PM_MIN_CONFIDENCE:
-        await message.answer("Пока мало сигналов — продолжим диалог.")
+        await send_text(bot, message.chat.id, "Пока мало сигналов — продолжим диалог.")
         return
     card_path = PROJECT_ROOT / PHILOSOPHY_MAP[pid]["card"]
     text = load_file(card_path) if card_path.exists() else ""
     if not text:
-        await message.answer("Пока мало сигналов — продолжим диалог.")
+        await send_text(bot, message.chat.id, "Пока мало сигналов — продолжим диалог.")
         return
-    await message.answer("Кажется, тебе может откликнуться такая оптика:\n\n" + text)
+    await send_text(bot, message.chat.id, "Кажется, тебе может откликнуться такая оптика:\n\n" + text)
 
 
 def _maybe_suggest_philosophy_match(
@@ -384,13 +424,16 @@ async def process_user_query(message: Message, user_text: str) -> None:
     user_id = message.from_user.id if message.from_user else 0
 
     if not user_text:
-        await message.answer("Не удалось распознать текст. Попробуйте написать или записать снова.")
+        await send_text(bot, message.chat.id, "Не удалось распознать текст. Попробуйте написать или записать снова.")
         return
+
+    # State persistence: загрузить с диска перед обработкой
+    _load_persisted_state()
 
     # Safety-фильтр
     if check_safety(user_text):
         safe_text = get_safe_response()
-        await message.answer(safe_text)
+        await send_text(bot, message.chat.id, safe_text)
         log_safety_event(user_id, user_text)
         return
 
@@ -580,29 +623,27 @@ async def process_user_query(message: Message, user_text: str) -> None:
     if DEBUG and stage in ("warmup", "guidance"):
         print(f"[Phi DEBUG] agency: meta_questions_stripped={meta_stripped}")
 
-    # Debug-метка (только при DEBUG=True)
-    detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
-    if mode_tag:
-        detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
+    # DEBUG: только в логах, НЕ в тексте ответа
     if DEBUG:
-        tail = f"[mode: {detected_modes} | stage: {stage}]"
-        if pattern_id:
-            tail = f"[pattern: {pattern_id}] " + tail
-        reply_text = f"{reply_text}\n\n{tail}"
+        detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
+        if mode_tag:
+            detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
+        print(f"[Phi DEBUG] mode={detected_modes} stage={stage}" + (f" pattern={pattern_id}" if pattern_id else ""))
 
-    # Логирование диалога (с тегами для debug)
+    # Логирование диалога
     log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
     if DEBUG and pattern_id:
         print(f"[Phi DEBUG] pattern_id={pattern_id}")
 
-    # Отправка ответа: sanitize убирает debug-теги из пользовательского текста
-    await message.answer(sanitize_output(reply_text), reply_markup=FEEDBACK_KEYBOARD)
+    # Unified send pipeline (sanitize внутри send_text)
+    save_state(_state_to_persist())
+    await send_text(bot, message.chat.id, reply_text, reply_markup=FEEDBACK_KEYBOARD)
 
 
 @dp.message(F.voice)
 async def handle_voice(message: Message) -> None:
     """Обработка голосовых сообщений."""
-    status = await message.answer("Слушаю...")
+    status_msg = await send_text(bot, message.chat.id, "Слушаю...")
     try:
         file = await bot.get_file(message.voice.file_id)
         ext = "ogg"  # Telegram отправляет голос в OGG
@@ -613,10 +654,12 @@ async def handle_voice(message: Message) -> None:
             user_text = transcribe_voice(tmp_path)
         finally:
             tmp_path.unlink(missing_ok=True)
-        await status.delete()
+        if status_msg:
+            await status_msg.delete()
         await process_user_query(message, user_text)
     except Exception as e:
-        await status.edit_text(f"Не удалось обработать голос: {e}")
+        if status_msg:
+            await status_msg.edit_text(f"Не удалось обработать голос: {e}")
 
 
 @dp.message(F.text)

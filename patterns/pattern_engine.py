@@ -132,8 +132,8 @@ def enforce_constraints(
         filtered_lines.append(ln)
     text = "\n".join(filtered_lines)
 
-    # 2) question limits (строго)
-    max_q = 1 if stage == "warmup" else min(2, q_limits.get(stage, 2))
+    # 2) question limits (строго: warmup=1, guidance=2, safety=1)
+    max_q = 1 if stage == "warmup" else (1 if stage == "safety" else min(2, q_limits.get(stage, 2)))
     parts = re.split(r"([?？])", text)
     q_positions = [i for i, p in enumerate(parts) if p in ("?", "？")]
     if len(q_positions) > max_q:
