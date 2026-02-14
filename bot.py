@@ -34,9 +34,26 @@ from safety import check_safety, get_safe_response
 BOT_VERSION = "Phi_Bot v10-prod"
 DEBUG = True
 
+# Feature flags
+ENABLE_TOOLS_CMD = True
+ENABLE_LENS_CMD = True
+ENABLE_SESSION_CLOSE_CHOICE = True
+
 # Stage machine v8: warmup | guidance
 USER_STAGE: dict[int, str] = {}
 USER_MSG_COUNT: dict[int, int] = {}
+LAST_LENS_BY_USER: dict[int, list[str]] = {}  # последние линзы для /lens
+
+# Человекочитаемые названия линз
+LENS_NAMES: dict[str, str] = {
+    "lens_micro_agency": "Мини-действие",
+    "lens_control_scope": "Зона контроля",
+    "lens_boundary": "Границы",
+    "lens_expectation_gap": "Разрыв ожиданий",
+    "lens_role_position": "Роль и позиция",
+    "lens_narrative": "Сюжет",
+    "lens_mortality_focus": "Время и выбор",
+}
 
 META_LECTURE_PATTERNS = (
     "скажу честно", "по философии", "как учит", "правильный взгляд",
@@ -165,6 +182,18 @@ def call_openai(system_prompt: str, user_text: str, force_short: bool = False) -
         return f"Ошибка API: {str(e)}"
 
 
+TOOLS_MENU = """Инструменты Phi Bot
+
+1) Зона контроля — разделить «влияю / не влияю». Когда хаос, перегруз, много всего.
+2) Мини-агентность — один шаг на 5 минут. Когда не могу начать, нет сил.
+3) Границы — одна фраза «да / нет / не сейчас». Когда давят, требуют.
+4) Разрыв ожиданий — «ожидал / получил». Когда разочарование, не оправдалось.
+5) Роль и позиция — участник / наблюдатель / лидер. Когда не знаю как поступить.
+6) Сюжет — «это глава, не вся книга». Когда я такой, всегда так, самооценка.
+
+Напиши: «хочу инструмент 2» — и я разверну его."""
+
+
 ABOUT_TEXT = (
     "Этот бот — секулярный философский агент поддержки.\n"
     "Он помогает размышлять и находить опору через философские рамки и вопросы.\n\n"
@@ -196,6 +225,45 @@ async def cmd_about(message: Message) -> None:
 async def cmd_version(message: Message) -> None:
     """Версия бота."""
     await message.answer(BOT_VERSION)
+
+
+@dp.message(Command("tools"))
+async def cmd_tools(message: Message) -> None:
+    """Меню инструментов (6 пунктов)."""
+    if not ENABLE_TOOLS_CMD:
+        await message.answer("Команда отключена.")
+        return
+    await message.answer(TOOLS_MENU)
+
+
+@dp.message(Command("lens"))
+async def cmd_lens(message: Message) -> None:
+    """Текущая линза, stage, альтернативы."""
+    if not ENABLE_LENS_CMD:
+        await message.answer("Команда отключена.")
+        return
+    uid = message.from_user.id if message.from_user else 0
+    stage = USER_STAGE.get(uid, "—")
+    last_lenses = LAST_LENS_BY_USER.get(uid)
+    popular = ["lens_control_scope", "lens_micro_agency", "lens_boundary"]
+    if last_lenses:
+        current = LENS_NAMES.get(last_lenses[0], last_lenses[0])
+        alts = [LENS_NAMES.get(n, n) for n in last_lenses[1:3]]
+        for p in popular:
+            if len(alts) >= 2:
+                break
+            name = LENS_NAMES.get(p, p)
+            if name not in alts and p not in last_lenses:
+                alts.append(name)
+    else:
+        current = "—"
+        alts = [LENS_NAMES.get(p, p) for p in popular[:3]]
+    lines = [
+        f"Текущая линза: {current}",
+        f"Stage: {stage}",
+        f"Альтернативы: {', '.join(alts[:2])}",
+    ]
+    await message.answer("\n".join(lines))
 
 
 async def process_user_query(message: Message, user_text: str) -> None:
@@ -255,6 +323,18 @@ async def process_user_query(message: Message, user_text: str) -> None:
     # Existential limiter: если режим existential → обрезать до 2 рамок
     if stage == "guidance" and _is_existential(user_text):
         reply_text = _trim_existential(reply_text)
+
+    # Сохраняем линзы для /lens
+    if stage == "guidance" and selected_names:
+        LAST_LENS_BY_USER[user_id] = selected_names
+
+    # Session close choice (только guidance, не при вопросительном сообщении)
+    if (
+        ENABLE_SESSION_CLOSE_CHOICE
+        and stage == "guidance"
+        and not (user_text or "").rstrip().endswith("?")
+    ):
+        reply_text = reply_text.rstrip() + "\n\nХочешь продолжить: (1) про причины или (2) про следующий шаг?"
 
     # Debug-метка (только при DEBUG=True)
     detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
