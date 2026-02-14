@@ -89,6 +89,10 @@ from philosophy.natural_injection import (
     mark_injection_done,
     insert_injection_after_first_paragraph,
 )
+from philosophy.recommendation_pause import (
+    detect_recommendation,
+    apply_recommendation_pause,
+)
 from philosophy.practice_cooldown import (
     strip_practice_content,
     contains_practice,
@@ -96,7 +100,7 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
 )
 
-BOT_VERSION = "Phi_Bot v17-philosophy-guided"
+BOT_VERSION = "Phi_Bot v17.1-recommendation-pause"
 DEBUG = True
 
 # Feature flags
@@ -655,6 +659,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     pattern_id = None
     forbid_practice = False
     injection_this_turn = False
+    has_reco = False
 
     text_lower = (user_text or "").lower()
     is_resistance = any(tr in text_lower for tr in RESISTANCE_TRIGGERS)
@@ -814,6 +819,14 @@ async def process_user_query(message: Message, user_text: str) -> None:
             if not should_ask_question(user_id, state):
                 reply_text = remove_questions(reply_text)
 
+            # v17.1 Recommendation Pause: при рекомендации — без вопросов, без практики, без fork
+            has_reco = stage != "safety" and detect_recommendation(reply_text)
+            if has_reco:
+                forbid_practice = True
+                reply_text = strip_practice_content(reply_text)
+                if DEBUG:
+                    print("[Phi DEBUG] recommendation_pause=on")
+
             # Pattern engine: UX prefix + echo stripping (только guidance)
             fork_allowed = fork_density_guard(user_id, state)
             if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
@@ -828,7 +841,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
                     reply_text = prefix + "\n\n" + stripped
                 elif stripped != reply_text:
                     reply_text = stripped
-                if want_option_close and not plan.get("disable_option_close") and fork_allowed:
+                if want_option_close and not plan.get("disable_option_close") and fork_allowed and not has_reco:
                     opt_line = get_option_close_line()
                     reply_text = reply_text.rstrip() + "\n\n" + opt_line
                     state["last_options"] = [opt_line]
@@ -842,7 +855,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
                     }
                 reply_text = enforce_constraints(reply_text, "guidance", constraints)
             else:
-                if want_option_close and not plan.get("disable_option_close") and fork_allowed:
+                if want_option_close and not plan.get("disable_option_close") and fork_allowed and not has_reco:
                     opt_line = get_option_close_line()
                     reply_text = reply_text.rstrip() + "\n\n" + opt_line
                     state["last_options"] = [opt_line]
@@ -879,6 +892,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     if (
         want_option_close
         and not (ENABLE_PATTERN_ENGINE and stage == "guidance")
+        and not has_reco
     ):
         reply_text = reply_text.rstrip() + "\n\nХочешь продолжить: (1) про причины или (2) про следующий шаг?"
 
@@ -895,6 +909,11 @@ async def process_user_query(message: Message, user_text: str) -> None:
         if mode_tag:
             detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
         print(f"[Phi DEBUG] mode={detected_modes} stage={stage}" + (f" pattern={pattern_id}" if pattern_id else ""))
+
+    # v17.1 Recommendation Pause: apply к тексту и practice_cooldown
+    if has_reco and stage != "safety":
+        reply_text = apply_recommendation_pause(reply_text)
+        state["practice_cooldown_turns"] = max(state.get("practice_cooldown_turns", 0), 2)
 
     # v17: practice cooldown при выводе практики; tick lens_lock и cooldown
     if stage == "guidance":
