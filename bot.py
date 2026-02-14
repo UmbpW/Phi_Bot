@@ -15,7 +15,13 @@ from aiogram.filters import CommandStart, Command
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from logger import log_dialog, log_feedback, log_safety_event
+from logger import (
+    _get_db_conn,
+    export_dialogs_from_db,
+    log_dialog,
+    log_feedback,
+    log_safety_event,
+)
 from prompt_loader import (
     build_system_prompt,
     load_all_lenses,
@@ -49,6 +55,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_MODEL = (os.getenv("OPENAI_MODEL") or "gpt-5.2-codex").strip()
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+EXPORT_TOKEN = (os.getenv("EXPORT_TOKEN") or "").strip()
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не задан в .env")
@@ -291,13 +299,58 @@ async def handle_feedback(callback: CallbackQuery) -> None:
         pass
 
 
+async def _run_export_server() -> None:
+    """HTTP‑сервер для /export — экспорт диалогов из БД."""
+    port = int(os.getenv("PORT", "0"))
+    if port <= 0 or not DATABASE_URL or not EXPORT_TOKEN:
+        return
+
+    from aiohttp import web
+
+    async def export_handler(request: web.Request) -> web.Response:
+        token = request.query.get("token", "")
+        if token != EXPORT_TOKEN:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        dialogs = export_dialogs_from_db()
+        return web.json_response({"dialogs": dialogs, "count": len(dialogs)})
+
+    async def health_handler(_: web.Request) -> web.Response:
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_get("/export", export_handler)
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Export server: PORT={port} /export?token=...")
+
+
 async def main() -> None:
     """Запуск бота."""
-    # Удаляем webhook (иначе getUpdates не получит сообщения)
     await bot.delete_webhook(drop_pending_updates=True)
-    # Проверка подключения к Telegram
     me = await bot.get_me()
     print(f"Подключено к Telegram: @{me.username}")
+
+    if DATABASE_URL:
+        conn = _get_db_conn()
+        print(f"[DB] PostgreSQL: {'OK' if conn else 'FAIL (см. лог выше)'}")
+
+    port = int(os.getenv("PORT", "0"))
+    if port > 0 and DATABASE_URL and EXPORT_TOKEN:
+        asyncio.create_task(_run_export_server())
+    elif port > 0:
+        # Railway web требует listen на PORT — заглушка если нет DB
+        from aiohttp import web
+        app = web.Application()
+        app.router.add_get("/", lambda r: web.Response(text="Phi Bot"))
+        app.router.add_get("/health", lambda r: web.Response(text="ok"))
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", port).start()
+
     print("Бот запущен. Ожидание сообщений...")
     await dp.start_polling(bot)
 
