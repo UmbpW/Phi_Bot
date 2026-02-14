@@ -119,7 +119,10 @@ def enforce_constraints(
 
     q_limits = constraints.get("question_limits", {})
     forbid = constraints.get("forbid_phrases", [])
+    # v17 RESPONSE_LENGTH_POLICY: guidance max_lines=18, min 8; no summary-trimming
     max_lines = constraints.get("max_lines", 10)
+    if stage == "guidance":
+        max_lines = 18
     first_line_words = constraints.get("first_line_max_words", 12)
 
     # 1) forbid_phrases: удалить строки, содержащие их

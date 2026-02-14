@@ -1,6 +1,12 @@
-"""Постобработка ответа: ограничение числа вопросов."""
+"""Постобработка ответа: ограничение числа вопросов, style guards."""
 
 import re
+
+
+def _apply_style_guards(text: str) -> str:
+    """v17: удаление BAN_PHRASES и directive/meta-фраз."""
+    from philosophy.style_guards import apply_style_guards as _guard
+    return _guard(text)
 
 
 def postprocess_response(text: str, stage: str) -> str:
@@ -21,7 +27,7 @@ def postprocess_response(text: str, stage: str) -> str:
 
     max_q = 1 if stage == "warmup" else 2
     if q_count <= max_q:
-        return text
+        return _apply_style_guards(text)
 
     # Обрезаем: оставляем содержимое до и включая max_q-й знак вопроса
     last_q_idx = q_positions[max_q - 1]
@@ -29,4 +35,7 @@ def postprocess_response(text: str, stage: str) -> str:
     truncated = "".join(parts[:end_slice]).rstrip()
     # Убираем висящие союзы/частицы в конце
     truncated = re.sub(r"\s+[иИ\sаА\s]+$", "", truncated)
-    return truncated.strip()
+    result = truncated.strip()
+    # v17 style guards
+    result = _apply_style_guards(result)
+    return result

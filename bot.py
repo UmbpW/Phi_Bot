@@ -70,8 +70,33 @@ from patterns.agency_layer import (
     replace_clarifying_with_example,
 )
 from philosophy.philosophy_responder import respond_philosophy_question
+from philosophy.guided_path import (
+    detect_lens_preview_need,
+    render_lens_preview,
+    render_lens_soft_question,
+    detect_lens_choice,
+    set_active_lens,
+    tick_lens_lock,
+    is_lens_locked,
+    get_active_lens,
+    LENS_TO_SYSTEM_ID,
+)
+from philosophy.natural_injection import (
+    detect_stable_pattern,
+    choose_philosophy_line,
+    render_injection,
+    should_inject,
+    mark_injection_done,
+    insert_injection_after_first_paragraph,
+)
+from philosophy.practice_cooldown import (
+    strip_practice_content,
+    contains_practice,
+    tick_practice_cooldown,
+    COOLDOWN_AFTER_PRACTICE,
+)
 
-BOT_VERSION = "Phi_Bot v15-first-turn-gate"
+BOT_VERSION = "Phi_Bot v17-philosophy-guided"
 DEBUG = True
 
 # Feature flags
@@ -292,6 +317,14 @@ def _state_to_persist() -> dict:
             "pending": state.get("pending"),
             "last_user_text": state.get("last_user_text", ""),
             "last_bot_text": state.get("last_bot_text", ""),
+            # v17 Philosophy Guided Path + Natural Injection
+            "active_lens": state.get("active_lens"),
+            "lens_lock_turns_left": state.get("lens_lock_turns_left", 0),
+            "last_injection_turn": state.get("last_injection_turn", -10),
+            "active_philosophy_line": state.get("active_philosophy_line"),
+            "practice_cooldown_turns": state.get("practice_cooldown_turns", 0),
+            "last_lens_preview_turn": state.get("last_lens_preview_turn"),
+            "user_language": state.get("user_language"),
             "last_updated": time.time(),
         }
     return out
@@ -366,6 +399,14 @@ def _load_persisted_state() -> None:
             "pending": blob.get("pending"),
             "last_user_text": blob.get("last_user_text", ""),
             "last_bot_text": blob.get("last_bot_text", ""),
+            # v17
+            "active_lens": blob.get("active_lens"),
+            "lens_lock_turns_left": blob.get("lens_lock_turns_left", 0),
+            "last_injection_turn": blob.get("last_injection_turn", -10),
+            "active_philosophy_line": blob.get("active_philosophy_line"),
+            "practice_cooldown_turns": blob.get("practice_cooldown_turns", 0),
+            "last_lens_preview_turn": blob.get("last_lens_preview_turn"),
+            "user_language": blob.get("user_language"),
         }
 
 
@@ -393,6 +434,12 @@ async def cmd_start(message: Message) -> None:
         "pending": None,
         "last_user_text": "",
         "last_bot_text": "",
+        "active_lens": None,
+        "lens_lock_turns_left": 0,
+        "last_injection_turn": -10,
+        "active_philosophy_line": None,
+        "practice_cooldown_turns": 0,
+        "last_lens_preview_turn": None,
     }
     save_state(_state_to_persist())
     await send_text(bot, message.chat.id, "Привет! Я Phi Bot — AI-помощник.\nНапишите или наговорите любой вопрос.")
@@ -504,7 +551,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
     # State persistence: загрузить с диска перед обработкой
     _load_persisted_state()
 
+    # SOURCE_RULE_LANGUAGE_MATCH: сохранить user_language из Telegram
+    _lang_code = getattr(message.from_user, "language_code", None) if message.from_user else None
+
     state = USER_STATE.get(user_id)
+    if state and _lang_code:
+        from philosophy.source_rule import get_user_language
+        state["user_language"] = get_user_language(_lang_code)
     if not state:
         USER_STATE[user_id] = {
             "turn_index": 0,
@@ -515,8 +568,18 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "pending": None,
             "last_user_text": "",
             "last_bot_text": "",
+            "active_lens": None,
+            "lens_lock_turns_left": 0,
+            "last_injection_turn": -10,
+            "active_philosophy_line": None,
+            "practice_cooldown_turns": 0,
+            "last_lens_preview_turn": None,
+            "user_language": None,
         }
         state = USER_STATE[user_id]
+        if _lang_code:
+            from philosophy.source_rule import get_user_language
+            state["user_language"] = get_user_language(_lang_code)
 
     # Pending follow-through: short_ack продолжает предыдущий контекст
     if state and is_short_ack(user_text) and state.get("pending"):
@@ -565,7 +628,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
     stage = _get_stage(user_id, user_text)
     USER_STAGE[user_id] = stage
 
-    # Governor state v12
+    # Governor state v12 + v17 schema
     if user_id not in USER_STATE:
         USER_STATE[user_id] = {
             "turn_index": 0,
@@ -576,6 +639,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "pending": None,
             "last_user_text": "",
             "last_bot_text": "",
+            "active_lens": None,
+            "lens_lock_turns_left": 0,
+            "last_injection_turn": -10,
+            "active_philosophy_line": None,
+            "practice_cooldown_turns": 0,
+            "last_lens_preview_turn": None,
         }
     state = USER_STATE[user_id]
     state["turn_index"] = state.get("turn_index", 0) + 1
@@ -584,6 +653,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
     mode_tag = None
     selected_names = []
     pattern_id = None
+    forbid_practice = False
+    injection_this_turn = False
 
     text_lower = (user_text or "").lower()
     is_resistance = any(tr in text_lower for tr in RESISTANCE_TRIGGERS)
@@ -608,6 +679,21 @@ async def process_user_query(message: Message, user_text: str) -> None:
     if DEBUG:
         print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
 
+    # v17 Lens choice: после lens preview пользователь выбрал линию → lock
+    last_preview = state.get("last_lens_preview_turn")
+    if (
+        last_preview is not None
+        and turn_index - 1 == last_preview
+        and stage == "guidance"
+    ):
+        chosen = detect_lens_choice(user_text)
+        if chosen:
+            set_active_lens(state, chosen)
+            state["last_lens_preview_turn"] = None
+            plan["force_philosophy_mode"] = False  # идём в guidance с одной линзой
+            if DEBUG:
+                print(f"[Phi DEBUG] guided_path=on lens_lock={chosen}")
+
     # Короткий ответ "оба"/"да"/"нет" + есть last_options: повторить варианты
     if plan.get("force_repeat_options") and state.get("last_options"):
         selected_names = []
@@ -620,16 +706,20 @@ async def process_user_query(message: Message, user_text: str) -> None:
         else:
             reply_text = "Уточни, пожалуйста — с чего начать?"
         want_option_close = False
-    # Philosophy mode: 3 оптики + вопрос A/B/C, pending для follow-through
-    elif plan.get("force_philosophy_mode"):
+    # v17 Philosophy mode: guided_path (lens preview) вместо картечи A/B/C
+    elif plan.get("force_philosophy_mode") and not get_active_lens(state):
         selected_names = []
-        reply_text, pending_info = respond_philosophy_question(
-            user_text, {"turn_index": turn_index}
+        theme = "default"
+        if detect_lens_preview_need(user_text):
+            theme = "guidance"
+        reply_text = render_lens_preview(theme) + "\n\n" + render_lens_soft_question()
+        reply_text = enforce_constraints(
+            reply_text, "guidance", load_patterns().get("global_constraints", {})
         )
-        reply_text = enforce_constraints(reply_text, "guidance", load_patterns().get("global_constraints", {}))
+        state["last_lens_preview_turn"] = turn_index
         want_option_close = False
-        if pending_info:
-            state["pending"] = pending_info
+        if DEBUG:
+            print("[Phi DEBUG] guided_path=on")
     elif stage == "warmup":
         selected_names = []
         if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
@@ -643,12 +733,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 state["last_bridge_turn"] = turn_index
             else:
                 system_prompt = load_warmup_prompt()
-                ctx = pack_context(user_id, state, HISTORY_STORE)
+                ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
                 reply_text = call_openai(system_prompt, user_text, context_block=ctx)
                 reply_text = postprocess_response(reply_text, stage)
         else:
             system_prompt = load_warmup_prompt()
-            ctx = pack_context(user_id, state, HISTORY_STORE)
+            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             reply_text = postprocess_response(reply_text, stage)
     else:
@@ -667,7 +757,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
         else:
             main_prompt = load_system_prompt()
             all_lenses = load_all_lenses()
-            if detect_financial_pattern(user_text):
+            active_lens = get_active_lens(state)
+            if active_lens and active_lens in LENS_TO_SYSTEM_ID:
+                selected_names = [LENS_TO_SYSTEM_ID[active_lens]]
+            elif detect_financial_pattern(user_text):
                 selected_names = ["lens_expectation_gap", "lens_control_scope"]
                 mode_tag = "financial_pattern_confusion"
             else:
@@ -686,13 +779,34 @@ async def process_user_query(message: Message, user_text: str) -> None:
             if phi_style:
                 system_prompt += "\n\n---\n" + phi_style
 
-            ctx = pack_context(user_id, state, HISTORY_STORE)
+            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             if _is_meta_lecture(reply_text):
                 reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
-            if _is_existential(user_text):
+            # v17: запрещено summary-trimming при stage == guidance
+            if _is_existential(user_text) and stage != "guidance":
                 reply_text = _trim_existential(reply_text)
             reply_text = postprocess_response(reply_text, stage)
+
+            # v17 Natural injection: после первого абзаца, при устойчивом паттерне
+            injection_this_turn = False
+            stable_match = detect_stable_pattern(user_text)
+            if should_inject(state, stage, stable_match, is_safety=False):
+                line_id = choose_philosophy_line(stable_match, user_text)
+                injection = render_injection(line_id)
+                reply_text = insert_injection_after_first_paragraph(reply_text, injection)
+                mark_injection_done(state)
+                state["active_philosophy_line"] = line_id
+                injection_this_turn = True
+                if DEBUG:
+                    print(f"[Phi DEBUG] natural_injection={line_id}")
+
+            # v17 Practice cooldown: strip если cooldown или injection turn
+            forbid_practice = (
+                state.get("practice_cooldown_turns", 0) > 0 or injection_this_turn
+            )
+            if forbid_practice:
+                reply_text = strip_practice_content(reply_text)
 
             # Agency v13: handle "не понимаю" и answer>ask (guidance only)
             if handle_i_dont_understand(user_text):
@@ -781,6 +895,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
         if mode_tag:
             detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
         print(f"[Phi DEBUG] mode={detected_modes} stage={stage}" + (f" pattern={pattern_id}" if pattern_id else ""))
+
+    # v17: practice cooldown при выводе практики; tick lens_lock и cooldown
+    if stage == "guidance":
+        if contains_practice(reply_text) and not forbid_practice:
+            state["practice_cooldown_turns"] = COOLDOWN_AFTER_PRACTICE
+        tick_practice_cooldown(state)
+        tick_lens_lock(state)
 
     # История и last texts для context
     append_history(HISTORY_STORE, user_id, "user", user_text)
