@@ -34,6 +34,7 @@ from state_pm import pm_get_profile, pm_record_signal, pm_set_last_suggest_turn
 from philosophy_map import PHILOSOPHY_MAP, pm_score_philosophies
 from prompt_loader import load_file
 from response_postprocess import postprocess_response
+from utils.output_sanitizer import sanitize_output
 from patterns.pattern_engine import (
     load_patterns,
     choose_pattern,
@@ -471,11 +472,11 @@ async def process_user_query(message: Message, user_text: str) -> None:
             tail = f"[pattern: {pattern_id}] " + tail
         reply_text = f"{reply_text}\n\n{tail}"
 
-    # Логирование диалога
+    # Логирование диалога (с тегами для debug)
     log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
 
-    # Отправка ответа с кнопками фидбека
-    await message.answer(reply_text, reply_markup=FEEDBACK_KEYBOARD)
+    # Отправка ответа: sanitize убирает debug-теги из пользовательского текста
+    await message.answer(sanitize_output(reply_text), reply_markup=FEEDBACK_KEYBOARD)
 
 
 @dp.message(F.voice)
