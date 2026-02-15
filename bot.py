@@ -117,6 +117,7 @@ from philosophy.recommendation_pause import (
     detect_recommendation,
     apply_recommendation_pause,
 )
+from philosophy.style_guards import clamp_questions, strip_meta_tail
 from philosophy.practice_cooldown import (
     strip_practice_content,
     contains_practice,
@@ -1110,6 +1111,10 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
             )
             reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
         reply_text = reply_text2
+
+    # PATCH 4: strip_meta_tail + clamp_questions — до completion_guard
+    reply_text = strip_meta_tail(reply_text)
+    reply_text = clamp_questions(reply_text, max_questions=plan.get("max_questions", 1))
 
     # v21.4: meta-tail-to-fork/close — fix unfinished endings
     reply_text = meta_tail_to_fork_or_close(

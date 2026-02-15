@@ -93,3 +93,82 @@ def apply_style_guards(text: str, ban_empathy_openers: bool = False, answer_firs
     if len(result) == 0:
         return original
     return "\n".join(result).strip()
+
+
+# PATCH 4: meta tail strip + question clamp
+META_TAIL_PATTERNS = [
+    r"\bесли хочешь\b.*$",
+    r"\bесли хотите\b.*$",
+    r"\bможем продолжить\b.*$",
+    r"\bдавай продолжим\b.*$",
+    r"\bразобрать глубже или упростить\b.*$",
+    r"\bразобрать глубже\b.*$",
+    r"\bупростить\b.*$",
+    r"\bсмотреть рамку или практику\b.*$",
+    r"\bрамку или практику\b.*$",
+    r"\bпродолжим про причины или про следующий шаг\b.*$",
+    r"\bпродолжим с одного примера\b.*$",
+    r"\bвыберем направление\b.*$",
+    r"\bчтобы не давать пустых советов\b.*$",
+    r"\bважно понять\b.*$",
+]
+
+
+def strip_meta_tail(text: str) -> str:
+    """Удаляет мета-хвосты в последних 500 символах."""
+    s = (text or "").strip()
+    if not s:
+        return s
+
+    head = s[:-500] if len(s) > 500 else ""
+    tail = s[-500:] if len(s) > 500 else s
+
+    for pat in META_TAIL_PATTERNS:
+        tail = re.sub(pat, "", tail, flags=re.IGNORECASE | re.DOTALL).strip()
+
+    out = (head + tail).strip()
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
+
+
+def _split_sentences_for_clamp(text: str) -> list:
+    """Грубо: делим по . ! ? … + переносы."""
+    s = (text or "").strip()
+    if not s:
+        return []
+    parts = re.split(r"(?<=[.!?…])\s+", s)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def clamp_questions(text: str, max_questions: int = 1) -> str:
+    """Максимум max_questions вопросительных предложений; лишние — в утверждения."""
+    s = (text or "").strip()
+    if not s:
+        return s
+
+    qcount = s.count("?")
+    if qcount <= max_questions:
+        return s
+
+    sentences = _split_sentences_for_clamp(s)
+    kept = []
+    questions_kept = 0
+
+    for sent in sentences:
+        is_q = "?" in sent
+        if is_q:
+            if questions_kept < max_questions:
+                kept.append(sent)
+                questions_kept += 1
+            else:
+                replaced = sent.replace("?", "").strip()
+                replaced = re.sub(r"^(и\s+)?(еще|ещё)\s+", "", replaced, flags=re.IGNORECASE).strip()
+                if replaced:
+                    kept.append(replaced + ".")
+        else:
+            kept.append(sent)
+
+    out = " ".join(kept).strip()
+    out = re.sub(r"\s+\.", ".", out)
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
