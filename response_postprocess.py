@@ -1,6 +1,7 @@
 """Постобработка ответа: ограничение числа вопросов, style guards."""
 
 import logging
+from typing import Optional
 import re
 
 _logger = logging.getLogger("phi.telemetry")
@@ -36,7 +37,7 @@ def postprocess_response(
     text: str,
     stage: str,
     philosophy_pipeline: bool = False,
-    mode_tag: str | None = None,
+    mode_tag: Optional[str] = None,
     answer_first_required: bool = False,
     explain_mode: bool = False,
 ) -> str:

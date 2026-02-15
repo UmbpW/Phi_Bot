@@ -4,7 +4,10 @@ import random
 from typing import Any, Optional
 
 from router import detect_financial_pattern
-from utils.is_philosophy_question import is_philosophy_question as _is_philosophy_question
+from utils.is_philosophy_question import (
+    is_direct_philosophy_intent,
+    is_philosophy_question as _is_philosophy_question,
+)
 from utils.intent_gate import is_expand_request, is_philosophy_intent as _is_philosophy_intent
 
 # Короткие ответы — не переспрашивать "что имел в виду"
@@ -138,7 +141,20 @@ def governor_plan(
 
         return plan
 
-    # ТОЛЬКО ПОСЛЕ answer-first и explain: warmup rules, uncertainty rules, small talk
+    # Hotfix-A: direct philosophy — обход triage/orientation
+    if is_direct_philosophy_intent(user_text):
+        plan = {
+            "force_philosophy_mode": True,
+            "disable_warmup": True,
+            "disable_pattern_engine": True,
+            "stage_override": "guidance",
+            "philosophy_pipeline": True,
+            "answer_first_required": True,
+            "disable_triage_patterns": True,
+        }
+        return plan
+
+    # ТОЛЬКО ПОСЛЕ answer-first, explain и direct philosophy: warmup rules, uncertainty rules, small talk
     # v20.1 Warmup Hard Guard: длинные/финансовые — сразу guidance, без warmup patterns
     text_len = len((user_text or "").strip())
     if text_len > 250:

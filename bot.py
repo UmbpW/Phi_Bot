@@ -128,7 +128,7 @@ from philosophy.practice_cooldown import (
 BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 
 
-def finalize_reply(text: str, plan: dict | None = None) -> str:
+def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
     """Unified postprocess перед каждым send: strip_meta_tail → clamp_questions → completion_guard."""
     plan = plan or {}
     out = (text or "").strip()
@@ -848,8 +848,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
             print(f"[Phi DEBUG] orientation_choice={choice[:30]}")
 
     # PATCH 6: Orientation fallback — unclear msg, would go to warmup (priority after full_q, expand)
+    # Hotfix-A: skip triage при force_philosophy_mode
     if (
         not handled_orientation_choice
+        and not plan.get("force_philosophy_mode")
         and is_unclear_message(user_text)
         and stage == "warmup"
         and not plan.get("disable_warmup")

@@ -3,6 +3,7 @@ v21.2: looks_incomplete + add_closing_sentence (completion guard)."""
 
 import random
 import re
+from typing import Optional
 
 
 def _split_sentences(text: str) -> list:
@@ -28,7 +29,7 @@ META_TAIL_HARD_PHRASES = (
 
 def final_send_clamp(
     text: str,
-    mode_tag: str | None = None,
+    mode_tag: Optional[str] = None,
     stage: str = "",
     answer_first_required: bool = False,
     philosophy_pipeline: bool = False,
@@ -141,7 +142,7 @@ def strip_last_meta_sentence(text: str) -> str:
 
 def meta_tail_to_fork_or_close(
     text: str,
-    mode_tag: str | None = None,
+    mode_tag: Optional[str] = None,
     max_questions: int = 1,
 ) -> str:
     """Если ответ заканчивается мета-фразой — заменить на fork или закрытие.
