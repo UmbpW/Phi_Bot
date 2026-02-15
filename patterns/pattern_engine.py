@@ -140,11 +140,13 @@ def enforce_constraints(
 
     q_limits = constraints.get("question_limits", {})
     forbid = constraints.get("forbid_phrases", [])
-    # v17 RESPONSE_LENGTH_POLICY: guidance max_lines=18, min 8; no summary-trimming
+    # v17 RESPONSE_LENGTH_POLICY: guidance max_lines=18; FIX C: 24 для guidance (не телеграф)
     max_lines = constraints.get("max_lines", 10)
     if stage == "guidance":
-        max_lines = 18
+        max_lines = 24
     first_line_words = constraints.get("first_line_max_words", 12)
+    if stage == "guidance":
+        first_line_words = None  # FIX C: не резать первую строку в guidance
 
     # 1) forbid_phrases: удалить строки, содержащие их
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
@@ -170,9 +172,9 @@ def enforce_constraints(
         lines = lines[:max_lines]
         text = "\n".join(lines)
 
-    # 4) first_line_max_words
+    # 4) first_line_max_words (только для warmup)
     lines = text.split("\n")
-    if lines and first_line_words:
+    if lines and first_line_words and stage != "guidance":
         first = lines[0]
         words = first.split()
         if len(words) > first_line_words:

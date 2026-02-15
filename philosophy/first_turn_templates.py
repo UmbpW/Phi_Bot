@@ -39,23 +39,21 @@ def _is_fear_intent(text: str) -> bool:
     return any(k in t for k in ("страх", "тревог", "неопредел", "паник", "волнуюсь", "боюсь"))
 
 
-def _is_money_or_confession_intent(text: str) -> bool:
+def _is_money_intent(text: str) -> bool:
+    """Деньги/финансы — не смысл жизни без денег."""
     t = text.lower()
-    return any(
-        k in t
-        for k in (
-            "деньг",
-            "бедност",
-            "богатств",
-            "конфесс",
-            "религ",
-            "христиан",
-            "ислам",
-            "будд",
-            "смысл",
-            "зачем жить",
-        )
-    )
+    return any(k in t for k in ("деньг", "бедност", "богатств"))
+
+
+def _is_confession_intent(text: str) -> bool:
+    t = text.lower()
+    return any(k in t for k in ("конфесс", "религ", "христиан", "ислам", "будд", "молитв", "вера"))
+
+
+def _is_meaning_life_intent(text: str) -> bool:
+    """Смысл жизни / экзистенциальная пустота — без денег."""
+    t = text.lower()
+    return any(k in t for k in ("смысл", "зачем жить", "бессмыслен", "пустота", "зачем вообще"))
 
 
 def render_first_turn_philosophy(user_text: str) -> tuple[str, str]:
@@ -84,21 +82,23 @@ def render_first_turn_philosophy(user_text: str) -> tuple[str, str]:
             FEAR_QUESTION,
         ]
         return "\n".join(lines), "fear"
-    if _is_money_or_confession_intent(user_text):
-        is_confession = any(
-            k in user_text.lower()
-            for k in ("конфесс", "религ", "христиан", "ислам", "будд", "молитв", "вера")
+    # FIX A: смысл жизни/пустота — НЕ деньги (отдельный шаблон)
+    if _is_meaning_life_intent(user_text) and not _is_money_intent(user_text):
+        MEANING_BRIDGE = "Когда всё кажется бессмысленным, мозг ищет один большой ответ — которого нет."
+        MEANING_OPTICS = (
+            "Стоики: смысл не в объяснении, а в действии. Что можно сделать сегодня, чтобы не предать себя?",
+            "Экзистенциализм: смысл создаётся выбором. Не «зачем жить», а «ради чего я живу этот час».",
+            "Франкл: смысл обнаруживается в ценностях — творчество, переживание, отношение.",
         )
-        lines = [
-            MONEY_BRIDGE,
-            "",
-            MONEY_OPTICS[0],
-            MONEY_OPTICS[1],
-            MONEY_OPTICS[2],
-        ]
-        if is_confession:
-            lines.extend(["", CONFESSION_ADD])
-        lines.extend(["", MONEY_QUESTION])
+        lines = [MEANING_BRIDGE, ""] + list(MEANING_OPTICS) + ["", "Тебе важнее облегчение сейчас или направление на ближайшее время?"]
+        return "\n".join(lines), "meaning"
+
+    if _is_confession_intent(user_text):
+        lines = [MONEY_BRIDGE, ""] + list(MONEY_OPTICS) + ["", CONFESSION_ADD, "", MONEY_QUESTION]
+        return "\n".join(lines), "confession"
+
+    if _is_money_intent(user_text):
+        lines = [MONEY_BRIDGE, ""] + list(MONEY_OPTICS) + ["", MONEY_QUESTION]
         return "\n".join(lines), "money"
     # Fallback: decision (most common for philosophy intent)
     lines = [

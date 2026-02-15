@@ -77,14 +77,33 @@ CLOSING_POOL = [
 ]
 
 
+# FIX B2: висящие конструкции — обрывы на : ; — , ... …
+HANGING_ENDINGS = (":", ";", "—", ",", "...", "…")
+HANGING_PHRASES_TAIL = (
+    "помогает не", "рождается не", "уверенность здесь", "иногда",
+    "обычно", "это потому что", "злость обычно", "так как", "потому что", "когда",
+)
+HANGING_PHRASES_START = (
+    "запись помогает не", "иногда мысли не", "уверенность здесь",
+    "вариант без", "первый —", "второй —",
+)
+
+
 def looks_incomplete(text: str) -> bool:
-    """Проверяет, выглядит ли ответ незавершённым (обрубленным)."""
+    """Проверяет, выглядит ли ответ незавершённым (обрубленным).
+    FIX B2: + висящие конструкции, обрывы на : ; — , фразы-обрывки."""
     if not text:
         return True
     t = text.strip()
     if len(t) < 240:  # коротко для "полного вопроса"
         return True
     if t[-1] not in ".!?…":
+        return True
+    # висящие окончания
+    if any(t.rstrip().endswith(e) for e in HANGING_ENDINGS):
+        return True
+    last_80 = t[-80:].lower()
+    if any(last_80.endswith(p) or p in last_80[-40:] for p in HANGING_PHRASES_TAIL):
         return True
     # защита от "обрубка": последняя строка слишком короткая
     last = t.split("\n")[-1].strip() if "\n" in t else t
@@ -93,9 +112,33 @@ def looks_incomplete(text: str) -> bool:
     return False
 
 
+def _strip_hanging_tail(text: str) -> str:
+    """Удалить висящий хвост до последнего полного предложения."""
+    s = (text or "").strip()
+    if not s:
+        return s
+    parts = re.split(r"(?<=[.!?…])\s+", s)
+    if len(parts) <= 1:
+        # нет полных предложений — вернуть всё кроме висящего конца
+        for end in HANGING_ENDINGS:
+            if s.rstrip().endswith(end):
+                # отрезать от последнего полного слова
+                words = s.rsplit(None, 1)
+                if len(words) >= 2:
+                    return words[0].rstrip(":;,—…")
+        return s
+    return " ".join(parts[:-1]).strip()
+
+
 def add_closing_sentence(text: str) -> str:
-    """Добавляет нейтральное философское закрытие без коуч-лексики и meta-навигации."""
-    return text.rstrip() + "\n\n" + random.choice(CLOSING_POOL)
+    """Добавляет нейтральное философское закрытие без коуч-лексики и meta-навигации.
+    FIX B2: при висящем хвосте сначала отрезать обрыв."""
+    s = (text or "").strip()
+    if not s:
+        return text
+    if s[-1] in HANGING_ENDINGS or any(s.lower()[-50:].strip().endswith(p) for p in HANGING_PHRASES_TAIL):
+        s = _strip_hanging_tail(s)
+    return (s.rstrip() + "\n\n" + random.choice(CLOSING_POOL)).strip()
 
 
 # v21.4: meta-tail-to-fork/close — замена хвоста мета-фраз на fork или закрытие
@@ -217,11 +260,18 @@ def _strip_last_sentence_p3(text: str) -> str:
     return " ".join(parts[:-1]).strip()
 
 
-def completion_guard(text: str, max_questions: int = 1) -> str:
-    """PATCH 3: Если хвост — мета-фраза, диагностика или незакрытая подводка → fork или close."""
+def completion_guard(text: str, max_questions: int = 1, user_text: Optional[str] = None) -> str:
+    """PATCH 3 + FIX B2: мета-фразы, диагностика, висящие конструкции → repair или close."""
     s = (text or "").strip()
     if not s:
         return s
+
+    # FIX B2: висящие конструкции и обрывы — strip + add closing
+    if looks_incomplete(s):
+        base = _strip_hanging_tail(s)
+        if len(base) < 100:
+            base = s
+        return (base.rstrip() + "\n\n" + random.choice(CLOSING_POOL)).strip()
 
     if not _ends_with_trigger_p3(s):
         return s

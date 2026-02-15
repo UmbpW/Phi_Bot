@@ -63,12 +63,26 @@ def is_short_ambiguous(text: str) -> bool:
     return t in SHORT_AMBIGUOUS or (len(t) <= 3 and t.isalpha())
 
 
+# FIX C: pragmatic triggers — не афоризмы-осколки, не короткие паттерны
+PRAGMATIC_TRIGGERS = (
+    "конкретно", "конкретик", "конкрет", "по делу", "хватит", "перестань",
+    "не надо философии", "без философии", "не коротко", "почему так коротко",
+    "какой толк", "формальная фраза", "ты меня не слышишь",
+)
+
 FULL_Q_MARKERS = [
     "что делать", "не понимаю", "не получается", "помоги", "как быть",
     "как выйти", "устал", "тревож", "боюсь", "пустот", "смысл", "один",
     "деньги", "финанс", "отношен", "выбор", "решени", "нет сил",
     "плохо", "тупик", "завал", "депресс", "паник", "страх",
 ]
+
+# FIX D: answer-first для "как/что делать" + темы состояния
+STATE_TOPIC_MARKERS = (
+    "сон", "бессонниц", "уснуть", "мысли не дают", "злость", "тревога", "паника",
+    "апатия", "плохо", "устал", "разбит", "ничего не хочу",
+)
+ACTION_OPENERS = ("как ", "что делать", "что с этим", "помоги", "объясни", "расскажи", "почему")
 
 
 def is_full_question(text: str) -> bool:
@@ -91,6 +105,26 @@ def is_full_question(text: str) -> bool:
     return False
 
 
+def _has_pragmatic_trigger(text: str) -> bool:
+    """FIX C: пользователь хочет конкретики, не афоризмов."""
+    t = (text or "").strip().lower()
+    return any(tr in t for tr in PRAGMATIC_TRIGGERS)
+
+
+def _is_action_state_request(text: str) -> bool:
+    """FIX D: 'как/что делать/помоги' + темы состояния → answer-first, без triage."""
+    t = (text or "").strip().lower()
+    has_opener = any(o in t for o in ACTION_OPENERS)
+    has_state = any(m in t for m in STATE_TOPIC_MARKERS)
+    return has_opener and has_state
+
+
+def _is_philosophy_chat_request(text: str) -> bool:
+    """FIX D: 'давай просто поговорим про философию' → philosophy_pipeline, без triage."""
+    t = (text or "").strip().lower()
+    return "давай просто поговорим про философию" in t or "как разные традиции смотрят на" in t
+
+
 def governor_plan(
     user_id: int,
     stage: str,
@@ -99,6 +133,37 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
+    # FIX C: pragmatic triggers — disable pattern_engine
+    if _has_pragmatic_trigger(user_text):
+        return {
+            "disable_pattern_engine": True,
+            "disable_option_close": True,
+            "disable_fork": True,
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_warmup": True,
+        }
+
+    # FIX D: action + state topic → answer-first, no triage
+    if _is_action_state_request(user_text):
+        return {
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_warmup": True,
+            "disable_pattern_engine": True,
+            "max_questions": 1,
+        }
+
+    # FIX D: philosophy chat request
+    if _is_philosophy_chat_request(user_text):
+        return {
+            "stage_override": "guidance",
+            "philosophy_pipeline": True,
+            "disable_warmup": True,
+            "disable_pattern_engine": True,
+            "max_questions": 1,
+        }
+
     # Answer-first must override warmup & patterns — ПЕРВОЕ правило, до warmup/uncertainty
     if is_full_question(user_text):
         plan = {}
@@ -206,5 +271,11 @@ def governor_plan(
     # Страховка: answer_first → pattern_engine жёстко выключен
     if plan.get("answer_first_required"):
         plan["disable_pattern_engine"] = True
+
+    # FIX C: synth persona impatient_pragmatic — hates short answers
+    uid_str = str(user_id)
+    if "impatient_pragmatic" in uid_str:
+        plan["disable_pattern_engine"] = True
+        plan["disable_option_close"] = True
 
     return plan

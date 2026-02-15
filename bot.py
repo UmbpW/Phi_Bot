@@ -373,10 +373,12 @@ ORIENTATION_MESSAGE_RU = (
 
 
 def _state_to_persist() -> dict:
-    """Собрать state для сохранения на диск."""
+    """Собрать state для сохранения на диск. FIX A: synth user_id не персистим."""
     import time
     out = {}
     for uid, state in USER_STATE.items():
+        if str(uid).startswith("synth:"):
+            continue
         stage = USER_STAGE.get(uid, "warmup")
         out[str(uid)] = {
             "stage": stage,

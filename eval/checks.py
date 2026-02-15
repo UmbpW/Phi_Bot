@@ -52,17 +52,25 @@ def looks_like_context_drop(prev_user: str, bot_text: str) -> bool:
 
 
 def looks_incomplete(text: str) -> bool:
-    """Заканчивается обрывом без точки."""
+    """Заканчивается обрывом без точки. FIX: + висящие конструкции, фразы-обрывки."""
     if not text:
         return True
     t = (text or "").strip()
     if not t:
         return True
+    if t[-1] not in ".!?…":
+        return True
+    # висящие окончания
+    if any(t.rstrip().endswith(e) for e in (":", ";", "—", ",", "...", "…")):
+        return True
     incomplete_endings = ("иногда", "обычно", "это потому что", "злость обычно", "так как", "потому что", "когда")
-    last_50 = t[-50:].lower()
-    if t[-1] in ".!?":
-        return False
-    return any(last_50.endswith(e) or e in last_50[-20:] for e in incomplete_endings)
+    last_80 = t[-80:].lower()
+    if any(last_80.endswith(e) or e in last_80[-40:] for e in incomplete_endings):
+        return True
+    hanging_phrases = ("помогает не", "рождается не", "уверенность здесь", "вариант без")
+    if any(p in last_80 for p in hanging_phrases):
+        return True
+    return False
 
 
 def run_checks(user_text: str, bot_text: str, prev_user: Optional[str] = None) -> dict:

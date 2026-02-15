@@ -29,7 +29,7 @@ def load_yaml(path: Path) -> Union[dict, list]:
         return yaml.safe_load(f) or []
 
 
-def _default_state(user_id: int) -> dict:
+def _default_state(user_id) -> dict:
     return {
         "turn_index": 0,
         "last_bridge_turn": -10,
@@ -52,8 +52,8 @@ def _default_state(user_id: int) -> dict:
     }
 
 
-def run_turn(user_id: int, user_text: str) -> dict:
-    """Один ход: пользователь → бот. Использует generate_reply_core из bot."""
+def run_turn(user_id, user_text: str, history: list) -> dict:
+    """Один ход: пользователь → бот. history синхронизируется с HISTORY_STORE для synth."""
     from bot import (
         USER_STATE,
         USER_STAGE,
@@ -61,17 +61,18 @@ def run_turn(user_id: int, user_text: str) -> dict:
         HISTORY_STORE,
         generate_reply_core,
     )
-
+    # FIX A: synth — изолированная история, сброс на каждый диалог
+    HISTORY_STORE[user_id] = list(history)
     if user_id not in USER_STATE:
         USER_STATE[user_id] = _default_state(user_id)
-    if user_id not in HISTORY_STORE:
-        HISTORY_STORE[user_id] = []
     if user_id not in USER_STAGE:
         USER_STAGE[user_id] = "warmup"
     if user_id not in USER_MSG_COUNT:
         USER_MSG_COUNT[user_id] = 0
 
     result = generate_reply_core(user_id, user_text)
+    # обновить history после append_history внутри core
+    history[:] = list(HISTORY_STORE.get(user_id, []))
     return result
 
 
@@ -125,14 +126,16 @@ def main():
         for scenario in scenarios:
             if args.limit and dialog_id >= args.limit:
                 break
-            user_id = 900000 + dialog_id
+            persona_id = persona.get("id", "unknown")
+            scenario_id = scenario.get("id", "unknown")
+            user_id = f"synth:{persona_id}:{scenario_id}:{dialog_id}"
             history = []
             user_text = scenario.get("seed_message", "Привет")
             turns = scenario.get("length_turns", 7)
             prev_user = None
             dialog = []
             for t in range(turns):
-                result = run_turn(user_id, user_text)
+                result = run_turn(user_id, user_text, history)
                 reply = result.get("reply_text", "")
                 history.append({"role": "user", "content": user_text})
                 history.append({"role": "assistant", "content": reply})
