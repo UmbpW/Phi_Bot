@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Пост-обработка jsonl и сбор метрик для сводок."""
+"""Пост-обработка jsonl и сбор метрик для сводок. Итерация по всем персонам."""
 
 import json
 import sys
@@ -7,9 +7,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from eval.checks import run_checks
+from eval.run_synth_simulation import load_personas
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REPORTS_DIR = PROJECT_ROOT / "reports"
+PERSONAS_FILE = PROJECT_ROOT / "eval" / "synth_personas.yaml"
 
 
 def multi_q(text: str, max_q: int = 1) -> int:
@@ -64,8 +66,45 @@ def process_dir(d: Path) -> dict:
     return m
 
 
+def discover_persona_ids_from_reports() -> list[str]:
+    """Извлекает persona_id из имён каталогов в reports/."""
+    import re
+    seen = set()
+    if not REPORTS_DIR.exists():
+        return []
+    for d in REPORTS_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        name = d.name
+        if name.startswith("smoke_") or name.startswith("full_"):
+            pid = name.replace("smoke_", "").replace("full_", "")
+            if pid and pid not in seen:
+                seen.add(pid)
+        else:
+            match = re.match(r"^(.+?)_\d{8}_\d{4}$", name)
+            pid = match.group(1) if match else name
+            if pid and pid not in seen:
+                seen.add(pid)
+    return list(seen)
+
+
 def main():
-    for name in ["system_builder_intense", "structured_ops_stoic"]:
+    # Источники персон: 1) загрузка из файла 2) обнаружение в reports
+    persona_ids = []
+    if PERSONAS_FILE.exists():
+        try:
+            personas = load_personas(PERSONAS_FILE)
+            persona_ids = [p.get("id") for p in personas if p.get("id")]
+        except Exception:
+            pass
+    discovered = discover_persona_ids_from_reports()
+    for pid in discovered:
+        if pid and pid not in persona_ids:
+            persona_ids.append(pid)
+    if not persona_ids:
+        persona_ids = discovered or ["system_builder_intense", "structured_ops_stoic"]
+
+    for name in persona_ids:
         base = REPORTS_DIR / name
         if not base.exists():
             subdirs = [d for d in REPORTS_DIR.iterdir() if d.is_dir() and name in d.name]
@@ -98,6 +137,7 @@ multi_question: {m['multi_question_violations']}
 avg_len: {m['avg_answer_length']}
 =========================
 """)
+            break  # один отчёт на персону
 
 
 if __name__ == "__main__":

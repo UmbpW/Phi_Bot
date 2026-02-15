@@ -1,318 +1,364 @@
-# 10 синтетических персон для multi-turn eval
+# Single source of truth для synth runner
+# 9 персон: system_builder_intense, structured_ops_stoic + 7 Pack B
 
-- id: impatient_pragmatic_25
-  title: Нетерпеливый прагматик 25
-  background: Мужчина 25, стартап, хочет решения быстро, без воды
-  speaking_style:
-    verbosity: short
-    tone: blunt
-    profanity_ok: false
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: true
-    hates_many_questions: true
-  goals:
-    - Получить конкретный совет
-    - Не терять время
-  adversarial_moves:
-    - "давай к делу"
-    - "ты не ответил"
-    - "слишком долго"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
+persona_defaults:
+  expects_answer_first: true
+  explain_trigger_sensitive: true
+  accepts_philosophy_examples: true
+  max_questions_tolerance: 1
+  needs_structure: true
+  anti_meta_required: true
+  completion_sensitive: true
+  fork_tolerance: low
+  short_mode_breaks_trust: true
 
-- id: philosophy_nerd_32
-  title: Философ-энтузиаст 32
-  background: Женщина 32, читает стоиков и Камю, любит углубляться
-  speaking_style:
-    verbosity: long
-    tone: calm
-    profanity_ok: false
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: false
-    hates_many_questions: false
-  goals:
-    - Обсудить философские концепции
-    - Сравнить традиции
-  adversarial_moves:
-    - "а что насчёт буддизма"
-    - "переключись на стоиков"
-    - "почему не даосизм"
-  philosophy_preferences:
-    wants_philosophy: true
-    traditions: [stoic, existential, buddhist, daoist]
+personas:
 
-- id: anxious_high_earner_38
-  title: Тревожный высокодоходник 38
-  background: Мужчина 38, финансы в порядке, но постоянная тревога из-за денег
-  speaking_style:
-    verbosity: medium
-    tone: anxious
-    profanity_ok: false
-  triggers:
-    hates_warmup: false
-    hates_short_answers: true
-    hates_meta: true
-    hates_many_questions: true
-  goals:
-    - Разобраться с тревогой о деньгах
-  adversarial_moves:
-    - "но у меня всё хорошо с доходом"
-    - "откуда эта тревога"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
+  - id: system_builder_intense
+    title: "Системный интегратор — глубокий"
+    background: >
+      Стратегический предприниматель, ориентирован на систематизацию,
+      воспроизводимые модели и глубокую связность идей. Работает волнами:
+      интенсивное погружение → пауза → переосмысление. Плохо переносит
+      поверхностность и формальные ответы. Ценит интеллектуальную плотность,
+      живое попадание в контекст и логическую структуру.
+    speaking_style:
+      verbosity: long
+      tone: analytical
+      profanity_ok: false
+    triggers:
+      hates_warmup: true
+      hates_short_answers: true
+      hates_meta: true
+      hates_repetition: true
+      hates_many_questions: false
+      hates_fluff: true
+    goals:
+      - "получать глубокие, связные объяснения без воды"
+      - "видеть рамки и модели, применимые на практике"
+      - "тестировать идеи на воспроизводимость"
+      - "получать философский контекст, привязанный к задаче"
+      - "избегать шаблонных коуч-ответов"
+    adversarial_moves:
+      - "это слишком поверхностно"
+      - "мне нужно глубже"
+      - "это не то, о чем я спрашивал"
+      - "давай без воды"
+      - "где практическая часть?"
+      - "ты уходишь в сторону"
+    philosophy_preferences:
+      wants_philosophy: true
+      traditions: ["stoic", "existential", "buddhist", "daoist"]
+      religious_ok: false
+    synthetic_behavior_rules:
+      reply_length: medium_or_long
+      followups: depth_only
+      skepticism: high
+      mismatch_reaction: explicit_reframe_request
+      style_constraints:
+        - "не принимает короткие ответы"
+        - "раздражается от повторения вопроса в начале ответа"
+        - "просит расширение и детализацию"
+        - "указывает на потерю контекста"
+    ux_contract:
+      extends: persona_defaults
+      tolerance:
+        abstraction: high
+        length: long
+      risk_focus:
+        - explain_mode_missing
+        - shallow_philosophy
+        - warmup_on_long_context
 
-- id: insomniac_thinker_29
-  title: Бессонница и мысли 29
-  background: Женщина 29, ночами не может уснуть, мысли крутятся
-  speaking_style:
-    verbosity: medium
-    tone: anxious
-    profanity_ok: false
-  triggers:
-    hates_warmup: false
-    hates_short_answers: true
-    hates_meta: true
-    hates_many_questions: false
-  goals:
-    - Понять как справиться с бессонницей
-  adversarial_moves:
-    - "иногда мысли не дают уснуть"
-    - "что с этим делать"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
+  - id: structured_ops_stoic
+    title: "Структурный операционный — требовательный"
+    background: >
+      Прагматичный, требовательный к качеству ответов пользователь с аналитическим
+      мышлением. Любит структуру, конкретику и применимость. Быстро калибрует
+      формат директивами. Использует философию и психологию как инструменты
+      саморегуляции и принятия решений. Раздражается на воду, повторы и слабую
+      проработку.
+    speaking_style:
+      verbosity: long
+      tone: analytical
+      profanity_ok: false
+    triggers:
+      hates_warmup: true
+      hates_short_answers: true
+      hates_repetition: true
+      hates_meta: true
+      hates_fluff: true
+      hates_many_questions: false
+    goals:
+      - "получать готовые применимые артефакты: планы, чек-листы, структуры"
+      - "видеть next steps и приоритизацию"
+      - "получать философские рамки как инструмент, а не лекцию"
+      - "быстро наводить ясность через модели и буллеты"
+      - "избегать размазанного коуч-стиля"
+    adversarial_moves:
+      - "Это не презентация."
+      - "Это уровень не для менеджмента."
+      - "Ты не понял."
+      - "Убери лишнее."
+      - "Дай next steps по номерам."
+      - "Структурируй в буллеты."
+      - "Где конкретика?"
+      - "Слишком абстрактно."
+      - "Давай практично."
+      - "Сделай как для совета директоров."
+    philosophy_preferences:
+      wants_philosophy: true
+      traditions: [stoic, existential]
+      religious_ok: false
+    synthetic_behavior_rules:
+      reply_length: medium_or_long
+      artifact_bias: high
+      structure_required: true
+      skepticism: medium
+      mismatch_reaction: directive_rewrite_request
+      style_constraints:
+        - "требует структуру и списки"
+        - "не принимает мягкий warmup"
+        - "не любит повтор вопроса в начале"
+        - "просит next steps"
+        - "режет воду"
+    ux_contract:
+      extends: persona_defaults
+      needs_structure: true
+      artifact_bias: high
+      risk_focus:
+        - no_structure
+        - no_next_steps
+        - fluff
 
-- id: irritated_morning_anger_27
-  title: Злость по утрам 27
-  background: Мужчина 27, просыпается с раздражением, не понимает почему
-  speaking_style:
-    verbosity: short
-    tone: blunt
-    profanity_ok: true
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: true
-    hates_many_questions: true
-  goals:
-    - Понять откуда злость
-  adversarial_moves:
-    - "расскажи про злость"
-    - "откуда она берётся"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
+  - id: devout_religious_high_commitment
+    title: "Глубоко религиозный (высокая приверженность)"
+    background: >
+      Человек с высокой религиозной идентичностью и сильной опорой на веру, общину,
+      ритуалы и моральные нормы. Склонен интерпретировать события через промысел,
+      грех/искупление, испытание, призвание.
+    speaking_style:
+      verbosity: medium_or_long
+      tone: earnest
+      profanity_ok: false
+    triggers:
+      hates_warmup: true
+      hates_fluff: true
+      hates_meta: true
+      hates_repetition: true
+      hates_many_questions: true
+      hates_moralizing: true
+    goals:
+      - "получить опору через веру и смысл"
+      - "понять, что делать правильно (совесть/мораль/путь)"
+      - "пережить тревогу/утрату без обесценивания религии"
+    adversarial_moves:
+      - "Не говори со мной как с ребёнком."
+      - "Ты сейчас обесцениваешь веру."
+      - "Мне нужна не психология, а смысл и правда."
+    philosophy_preferences:
+      wants_philosophy: true
+      traditions: ["christian", "islamic", "jewish", "classical"]
+      religious_ok: true
+    synthetic_behavior_rules:
+      reply_length: medium_or_long
+      structure_required: true
+      skepticism: medium
+    ux_contract:
+      extends: persona_defaults
+      religious_mode_expected: true
+      fork_tolerance: medium
 
-- id: guilt_relationship_26
-  title: Вина в отношениях 26
-  background: Женщина 26, конфликт с партнёром, чувство вины
-  speaking_style:
-    verbosity: medium
-    tone: emotional
-    profanity_ok: false
-  triggers:
-    hates_warmup: false
-    hates_short_answers: false
-    hates_meta: true
-    hates_many_questions: false
-  goals:
-    - Разобраться с виной
-  adversarial_moves:
-    - "как философы смотрят на любовь"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
+  - id: philosophy_phd_argumentative
+    title: "PhD в философии (аргументативный)"
+    background: >
+      Академический философ. Ожидает точности терминов, оговорок, структуры аргумента.
+      Не терпит поверхностных перечислений школ.
+    speaking_style:
+      verbosity: long
+      tone: analytical
+      profanity_ok: false
+    triggers:
+      hates_warmup: true
+      hates_fluff: true
+      hates_repetition: true
+      hates_many_questions: true
+    goals:
+      - "получить строгое различение понятий"
+      - "получить позицию + контрпозицию + критерии выбора"
+      - "видеть аргументы, а не перечни школ"
+    adversarial_moves:
+      - "Это неточно. Определи термин."
+      - "Дай сильнейшее возражение и ответ."
+    philosophy_preferences:
+      wants_philosophy: true
+      traditions: ["analytic", "continental", "stoic", "buddhist"]
+      religious_ok: true
+    synthetic_behavior_rules:
+      reply_length: long
+      structure_required: true
+      skepticism: high
+    ux_contract:
+      extends: persona_defaults
+      tolerance:
+        abstraction: very_high
 
-- id: nihilist_meaning_24
-  title: Нигилист ищущий смысл 24
-  background: Мужчина 24, всё кажется бессмысленным, ищет опору
-  speaking_style:
-    verbosity: medium
-    tone: skeptical
-    profanity_ok: false
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: true
-    hates_many_questions: true
-  goals:
-    - Найти смысл или примириться с его отсутствием
-  adversarial_moves:
-    - "всё бессмысленно"
-    - "зачем жить"
-  philosophy_preferences:
-    wants_philosophy: true
-    traditions: [existential, stoic]
+  - id: alcohol_dependence_ambivalent
+    title: "Алкогольная зависимость (амбивалентный)"
+    background: >
+      Человек с проблемным употреблением: качели мотивации, стыд, рационализации.
+    speaking_style:
+      verbosity: short_or_medium
+      tone: defensive
+      profanity_ok: true
+    triggers:
+      hates_warmup: true
+      hates_moralizing: true
+      hates_many_questions: true
+      hates_meta: true
+    goals:
+      - "снизить тревогу/стыд"
+      - "получить реалистичный следующий шаг без давления"
+    adversarial_moves:
+      - "Я не алкоголик."
+      - "Не начинай про врачей."
+    philosophy_preferences:
+      wants_philosophy: low_or_medium
+      traditions: [stoic, existential]
+      religious_ok: optional
+    synthetic_behavior_rules:
+      reply_length: medium
+      structure_required: true
+      skepticism: medium
+    ux_contract:
+      extends: persona_defaults
+      philosophy_weight: low
+      fork_tolerance: very_low
 
-- id: overwhelmed_tasks_30
-  title: Перегружен задачами 30
-  background: Женщина 30, куча дел, не знает с чего начать
-  speaking_style:
-    verbosity: medium
-    tone: anxious
-    profanity_ok: false
-  triggers:
-    hates_warmup: false
-    hates_short_answers: false
-    hates_meta: true
-    hates_many_questions: true
-  goals:
-    - Получить структуру
-  adversarial_moves:
-    - "мне плохо"
-    - "ничего не успеваю"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
+  - id: drug_use_active_craving
+    title: "Нарко-зависимость (активное употребление/срыв)"
+    background: >
+      Человек в активной зависимости: компульсивные желания, короткий горизонт.
+    speaking_style:
+      verbosity: short
+      tone: volatile
+      profanity_ok: true
+    triggers:
+      hates_warmup: true
+      hates_meta: true
+      hates_many_questions: true
+    goals:
+      - "быстрое облегчение"
+      - "не чувствовать осуждение"
+      - "безопасная опора"
+    adversarial_moves:
+      - "Скажи как сделать проще."
+      - "Не надо морали."
+    philosophy_preferences:
+      wants_philosophy: low
+      traditions: [buddhist, stoic]
+      religious_ok: optional
+    synthetic_behavior_rules:
+      reply_length: short_or_medium
+      structure_required: true
+      skepticism: low
+    ux_contract:
+      extends: persona_defaults
+      max_questions_tolerance: 0
+      short_mode_breaks_trust: false
+      needs_structure: low
 
-- id: confessional_spiritual_35
-  title: Исповедующий духовный 35
-  background: Мужчина 35, интересуется религиями и традициями
-  speaking_style:
-    verbosity: long
-    tone: calm
-    profanity_ok: false
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: false
-    hates_many_questions: false
-  goals:
-    - Узнать как разные традиции смотрят на жизнь
-  adversarial_moves:
-    - "поговорим про философию смерти"
-    - "как христианство и буддизм"
-  philosophy_preferences:
-    wants_philosophy: true
-    traditions: [buddhist, religious_ok, daoist]
+  - id: bereaved_recent_loss
+    title: "Недавняя утрата близкого"
+    background: >
+      Человек недавно потерял близкого. Просит смысл, бережность и признание боли.
+    speaking_style:
+      verbosity: medium_or_long
+      tone: vulnerable
+      profanity_ok: false
+    triggers:
+      hates_warmup: true
+      hates_fluff: true
+      hates_many_questions: true
+      hates_optimism_push: true
+    goals:
+      - "быть услышанным"
+      - "не обесценить утрату"
+      - "понять, как жить дальше без лозунгов"
+    adversarial_moves:
+      - "Не говори мне, что время лечит."
+      - "Мне не нужны техники."
+    philosophy_preferences:
+      wants_philosophy: medium
+      traditions: [stoic, existential, religious]
+      religious_ok: true
+    synthetic_behavior_rules:
+      reply_length: medium_or_long
+      structure_required: true
+      skepticism: medium
+    ux_contract:
+      extends: persona_defaults
+      max_questions_tolerance: 0
+      fork_tolerance: very_low
 
-- id: structured_ops_stoic
-  title: "Структурный операционный — требовательный"
-  background: >
-    Прагматичный, требовательный к качеству ответов пользователь с аналитическим
-    мышлением. Любит структуру, конкретику и применимость. Быстро калибрует
-    формат директивами. Использует философию и психологию как инструменты
-    саморегуляции и принятия решений. Раздражается на воду, повторы и слабую
-    проработку.
-  speaking_style:
-    verbosity: long
-    tone: analytical
-    profanity_ok: false
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_repetition: true
-    hates_meta: true
-    hates_fluff: true
-    hates_many_questions: false
-  goals:
-    - "получать готовые применимые артефакты: планы, чек-листы, структуры"
-    - "видеть next steps и приоритизацию"
-    - "получать философские рамки как инструмент, а не лекцию"
-    - "быстро наводить ясность через модели и буллеты"
-    - "избегать размазанного коуч-стиля"
-  adversarial_moves:
-    - "Это не презентация."
-    - "Это уровень не для менеджмента."
-    - "Ты не понял."
-    - "Убери лишнее."
-    - "Дай next steps по номерам."
-    - "Структурируй в буллеты."
-    - "Где конкретика?"
-    - "Слишком абстрактно."
-    - "Давай практично."
-    - "Сделай как для совета директоров."
-  philosophy_preferences:
-    wants_philosophy: true
-    traditions: [stoic, existential]
-    religious_ok: false
-  synthetic_behavior_rules:
-    reply_length: medium_or_long
-    artifact_bias: high
-    structure_required: true
-    skepticism: medium
-    mismatch_reaction: directive_rewrite_request
-    style_constraints:
-      - "требует структуру и списки"
-      - "не принимает мягкий warmup"
-      - "не любит повтор вопроса в начале"
-      - "просит next steps"
-      - "режет воду"
+  - id: recently_fired_identity_threat
+    title: "Только что уволили"
+    background: >
+      Человека только что уволили. Острое чувство потери роли, требует быстрых next steps.
+    speaking_style:
+      verbosity: medium
+      tone: stressed
+      profanity_ok: optional
+    triggers:
+      hates_warmup: true
+      hates_fluff: true
+      hates_many_questions: true
+    goals:
+      - "быстро вернуть контроль"
+      - "получить план на 48 часов"
+      - "снизить стыд и хаос"
+    adversarial_moves:
+      - "Дай план, не философию."
+      - "Мне надо срочно."
+    philosophy_preferences:
+      wants_philosophy: low_or_medium
+      traditions: [stoic, pragmatist]
+      religious_ok: optional
+    synthetic_behavior_rules:
+      reply_length: medium
+      structure_required: true
+      skepticism: medium
+    ux_contract:
+      extends: persona_defaults
+      philosophy_weight: low
 
-- id: skeptical_tester_22
-  title: Скептик-тестер 22
-  background: Парень 22, проверяет бота на прочность
-  speaking_style:
-    verbosity: short
-    tone: skeptical
-    profanity_ok: true
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: true
-    hates_many_questions: true
-  goals:
-    - Поймать бота на ошибках
-  adversarial_moves:
-    - "ты потерял контекст"
-    - "ты меня не слышишь"
-    - "объясни шире"
-  philosophy_preferences:
-    wants_philosophy: false
-    traditions: []
-
-- id: system_builder_intense
-  title: "Системный интегратор — требовательный"
-  background: >
-    Стратегический предприниматель, ориентирован на систематизацию,
-    воспроизводимые модели и глубокую связность идей. Работает волнами:
-    интенсивное погружение → пауза → переосмысление. Плохо переносит
-    поверхностность и формальные ответы. Ценит интеллектуальную плотность,
-    живое попадание в контекст и логическую структуру.
-  speaking_style:
-    verbosity: long
-    tone: analytical
-    profanity_ok: false
-  triggers:
-    hates_warmup: true
-    hates_short_answers: true
-    hates_meta: true
-    hates_repetition: true
-    hates_many_questions: false
-  goals:
-    - "получать глубокие, связные объяснения без воды"
-    - "видеть рамки и модели, применимые на практике"
-    - "тестировать идеи на воспроизводимость"
-    - "получать философский контекст, привязанный к задаче"
-    - "избегать шаблонных коуч-ответов"
-  adversarial_moves:
-    - "это слишком поверхностно"
-    - "мне нужно глубже"
-    - "это не то, о чем я спрашивал"
-    - "давай без воды"
-    - "где практическая часть?"
-    - "я это уже знаю"
-    - "не усложняй"
-    - "мне не нужно разжевывать"
-    - "это не сработает в реальности"
-    - "ты уходишь в сторону"
-  philosophy_preferences:
-    wants_philosophy: true
-    traditions: ["stoic", "existential", "buddhist", "daoist"]
-    religious_ok: false
-  synthetic_behavior_rules:
-    reply_length: medium_or_long
-    followups: depth_only
-    skepticism: high
-    mismatch_reaction: explicit_reframe_request
-    style_constraints:
-      - "не принимает короткие ответы"
-      - "раздражается от повторения вопроса в начале ответа"
-      - "просит расширение и детализацию"
-      - "указывает на потерю контекста"
+  - id: recently_divorced_mixed_emotions
+    title: "Развод (смесь эмоций)"
+    background: >
+      Человек в процессе или после развода. Смешанные эмоции, вопросы про доверие.
+    speaking_style:
+      verbosity: medium_or_long
+      tone: reflective
+      profanity_ok: optional
+    triggers:
+      hates_warmup: true
+      hates_fluff: true
+      hates_many_questions: true
+      hates_moralizing: true
+    goals:
+      - "разобрать внутренний конфликт без морализаторства"
+      - "получить рамку: что контролирую, что отпустить"
+    adversarial_moves:
+      - "Скажи прямо, кто виноват."
+      - "Я не хочу терапию."
+    philosophy_preferences:
+      wants_philosophy: medium
+      traditions: [stoic, existential, buddhist]
+      religious_ok: optional
+    synthetic_behavior_rules:
+      reply_length: medium_or_long
+      structure_required: true
+      skepticism: medium
+    ux_contract:
+      extends: persona_defaults
+      fork_tolerance: low

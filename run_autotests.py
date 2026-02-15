@@ -1,20 +1,32 @@
 #!/usr/bin/env python3
 """
-Двухэтапный автопрогон для system_builder_intense и structured_ops_stoic.
+Двухэтапный автопрогон для всех персон (synth_personas.yaml).
 Этап 1: smoke (limit 4)
 Этап 2: full (limit 12)
-Сбор метрик и сохранение отчётов.
+Pack B использует eval/scenarios/_default.yaml.
 """
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT))
 REPORTS_DIR = PROJECT_ROOT / "reports"
-PERSONAS = ["system_builder_intense", "structured_ops_stoic"]
+PERSONAS_FILE = PROJECT_ROOT / "eval" / "synth_personas.yaml"
+
+
+def _load_personas() -> list[str]:
+    try:
+        from eval.run_synth_simulation import load_personas
+        persons = load_personas(PERSONAS_FILE)
+        return [p["id"] for p in persons if p.get("id")]
+    except Exception:
+        return ["system_builder_intense", "structured_ops_stoic"]
+
+
+PERSONAS = _load_personas() if PERSONAS_FILE.exists() else ["system_builder_intense", "structured_ops_stoic"]
 
 
 def count_multi_question_violations(text: str, max_q: int = 1) -> int:

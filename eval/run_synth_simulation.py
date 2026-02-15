@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Multi-turn синтетический eval: persona × scenario, сбор метрик UX."""
+"""Multi-turn синтетический eval: persona × scenario (фиксированные turns), сбор метрик UX."""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Union
+from typing import Union, List, Dict, Any
 
 # PHI_EVAL=1 — обход проверки TELEGRAM_TOKEN при импорте
 os.environ["PHI_EVAL"] = "1"
@@ -15,7 +15,6 @@ os.environ["PHI_EVAL"] = "1"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Импорт после добавления пути
 try:
     import yaml
 except ImportError:
@@ -27,6 +26,45 @@ def load_yaml(path: Path) -> Union[dict, list]:
         raise RuntimeError("Установите PyYAML: pip install pyyaml")
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or []
+
+
+def load_personas(personas_path: Path) -> List[Dict[str, Any]]:
+    """
+    Загрузка персон из YAML.
+    - data dict + ключ "personas" -> берём data["personas"]
+    - data list -> берём как есть
+    - data dict без "personas" -> list(values) (legacy, без persona_defaults как персоны)
+    """
+    if not personas_path.exists():
+        raise FileNotFoundError(
+            f"Файл персон не найден: {personas_path}\n"
+            f"Укажите путь через --personas-file или создайте файл."
+        )
+    data = load_yaml(personas_path)
+    if isinstance(data, list):
+        return [p for p in data if isinstance(p, dict) and p.get("id")]
+    if isinstance(data, dict):
+        if "personas" in data:
+            persons = data["personas"]
+            if isinstance(persons, list):
+                return [p for p in persons if isinstance(p, dict) and p.get("id")]
+        return [p for p in data.values() if isinstance(p, dict) and p.get("id")]
+    return []
+
+
+def load_scenarios_for_persona(persona_id: str, scenarios_dir: Path) -> List[Dict[str, Any]]:
+    """
+    Загрузка сценариев для персоны.
+    Сначала eval/scenarios/{persona_id}.yaml, если нет — eval/scenarios/_default.yaml.
+    """
+    persona_file = scenarios_dir / f"{persona_id}.yaml"
+    default_file = scenarios_dir / "_default.yaml"
+    path = persona_file if persona_file.exists() else default_file
+    if not path.exists():
+        return []
+    data = load_yaml(path)
+    scenarios = data.get("scenarios", []) if isinstance(data, dict) else []
+    return [s for s in scenarios if isinstance(s, dict) and (s.get("turns") or s.get("id"))]
 
 
 def _default_state(user_id) -> dict:
@@ -53,7 +91,7 @@ def _default_state(user_id) -> dict:
 
 
 def run_turn(user_id, user_text: str, history: list) -> dict:
-    """Один ход: пользователь → бот. history синхронизируется с HISTORY_STORE для synth."""
+    """Один ход: пользователь → бот."""
     from bot import (
         USER_STATE,
         USER_STAGE,
@@ -61,7 +99,6 @@ def run_turn(user_id, user_text: str, history: list) -> dict:
         HISTORY_STORE,
         generate_reply_core,
     )
-    # FIX A: synth — изолированная история, сброс на каждый диалог
     HISTORY_STORE[user_id] = list(history)
     if user_id not in USER_STATE:
         USER_STATE[user_id] = _default_state(user_id)
@@ -71,7 +108,6 @@ def run_turn(user_id, user_text: str, history: list) -> dict:
         USER_MSG_COUNT[user_id] = 0
 
     result = generate_reply_core(user_id, user_text)
-    # обновить history после append_history внутри core
     history[:] = list(HISTORY_STORE.get(user_id, []))
     return result
 
@@ -84,29 +120,47 @@ def main():
     parser.add_argument("--only_scenario", type=str, default="", help="id сценария")
     parser.add_argument("--out_dir", type=str, default="", help="Папка вывода")
     parser.add_argument("--out", "--report_file", dest="report_file", type=str, default="", help="JSON отчёт")
+    parser.add_argument(
+        "--personas-file",
+        type=str,
+        default="",
+        help="Путь к YAML с персонами (по умолчанию eval/synth_personas.yaml)",
+    )
     args = parser.parse_args()
     if args.persona_alias:
         args.only_persona = args.only_persona or args.persona_alias
 
     eval_dir = Path(__file__).resolve().parent
-    personas_path = eval_dir / "synth_personas.yaml"
-    scenarios_path = eval_dir / "synth_scenarios.yaml"
+    personas_path = Path(args.personas_file) if args.personas_file else eval_dir / "synth_personas.yaml"
+    personas_path = personas_path.resolve()
+    if not personas_path.is_absolute():
+        personas_path = (PROJECT_ROOT / personas_path).resolve()
 
-    if not personas_path.exists() or not scenarios_path.exists():
-        print(f"Не найдены {personas_path} или {scenarios_path}")
+    try:
+        personas = load_personas(personas_path)
+    except FileNotFoundError as e:
+        print(str(e))
         sys.exit(1)
 
-    personas = load_yaml(personas_path)
-    scenarios = load_yaml(scenarios_path)
-    if not isinstance(personas, list):
-        personas = list(personas.values()) if isinstance(personas, dict) else []
-    if not isinstance(scenarios, list):
-        scenarios = list(scenarios.values()) if isinstance(scenarios, dict) else []
+    if not personas:
+        print(f"В файле {personas_path} нет персон с полем id.")
+        sys.exit(1)
+
+    scenarios_dir = eval_dir / "scenarios"
+    if not scenarios_dir.exists():
+        print(f"Каталог сценариев не найден: {scenarios_dir}")
+        sys.exit(1)
+
+    default_scenarios = load_scenarios_for_persona("_default", scenarios_dir)
+    if not default_scenarios:
+        print(f"Не найден eval/scenarios/_default.yaml с fallback-сценариями.")
+        sys.exit(1)
 
     if args.only_persona:
         personas = [p for p in personas if p.get("id") == args.only_persona]
-    if args.only_scenario:
-        scenarios = [s for s in scenarios if s.get("id") == args.only_scenario]
+        if not personas:
+            print(f"Персона не найдена: {args.only_persona}")
+            sys.exit(1)
 
     from eval.checks import run_checks
 
@@ -125,21 +179,35 @@ def main():
         "total_turns": 0,
         "total_len": 0,
     }
+    persona_ids_run = []
 
     dialog_id = 0
     for persona in personas:
+        persona_id = persona.get("id", "unknown")
+        scenarios = load_scenarios_for_persona(persona_id, scenarios_dir)
+        if not scenarios:
+            scenarios = default_scenarios
+
+        if args.only_scenario:
+            scenarios = [s for s in scenarios if s.get("id") == args.only_scenario]
+            if not scenarios:
+                continue
+
         for scenario in scenarios:
             if args.limit and dialog_id >= args.limit:
                 break
-            persona_id = persona.get("id", "unknown")
             scenario_id = scenario.get("id", "unknown")
+            turns = scenario.get("turns", [])
+            if not turns:
+                continue
+
             user_id = f"synth:{persona_id}:{scenario_id}:{dialog_id}"
             history = []
-            user_text = scenario.get("seed_message", "Привет")
-            turns = scenario.get("length_turns", 7)
             prev_user = None
             dialog = []
-            for t in range(turns):
+
+            for user_text in turns:
+                user_text = user_text.strip() if isinstance(user_text, str) else str(user_text)
                 result = run_turn(user_id, user_text, history)
                 reply = result.get("reply_text", "")
                 history.append({"role": "user", "content": user_text})
@@ -161,18 +229,19 @@ def main():
                 counts["total_turns"] += 1
                 counts["total_len"] += len(reply or "")
                 prev_user = user_text
-                from eval.synth_user_agent import synth_user_next
-                user_text = synth_user_next(persona, scenario, history)
 
-            out_file = out_dir / f"d{dialog_id}_{persona.get('id','')}_{scenario.get('id','')}.jsonl"
+            out_file = out_dir / f"d{dialog_id}_{persona_id}_{scenario_id}.jsonl"
             with open(out_file, "w", encoding="utf-8") as f:
                 for entry in dialog:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if persona_id not in persona_ids_run:
+                persona_ids_run.append(persona_id)
             dialog_id += 1
 
     avg_len = counts["total_len"] / counts["total_turns"] if counts["total_turns"] else 0
     report = {
         "persona": args.only_persona or (personas[0].get("id") if personas else ""),
+        "persona_ids_run": persona_ids_run,
         "dialogs": dialog_id,
         "total_turns": counts["total_turns"],
         "explain_too_short_count": counts["explain_too_short_count"],
@@ -189,6 +258,7 @@ def main():
         with open(args.report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
     print("\n--- Сводка ---")
+    print(f"personas: {persona_ids_run}")
     print(f"avg_len: {avg_len:.0f}")
     print(f"too_short_count: {counts['too_short_count']}")
     print(f"warmup_mismatch_count: {counts['warmup_mismatch_count']}")
