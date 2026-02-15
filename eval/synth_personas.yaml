@@ -192,6 +192,59 @@
     wants_philosophy: true
     traditions: [buddhist, religious_ok, daoist]
 
+- id: structured_ops_stoic
+  title: "Структурный операционный — требовательный"
+  background: >
+    Прагматичный, требовательный к качеству ответов пользователь с аналитическим
+    мышлением. Любит структуру, конкретику и применимость. Быстро калибрует
+    формат директивами. Использует философию и психологию как инструменты
+    саморегуляции и принятия решений. Раздражается на воду, повторы и слабую
+    проработку.
+  speaking_style:
+    verbosity: long
+    tone: analytical
+    profanity_ok: false
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_repetition: true
+    hates_meta: true
+    hates_fluff: true
+    hates_many_questions: false
+  goals:
+    - "получать готовые применимые артефакты: планы, чек-листы, структуры"
+    - "видеть next steps и приоритизацию"
+    - "получать философские рамки как инструмент, а не лекцию"
+    - "быстро наводить ясность через модели и буллеты"
+    - "избегать размазанного коуч-стиля"
+  adversarial_moves:
+    - "Это не презентация."
+    - "Это уровень не для менеджмента."
+    - "Ты не понял."
+    - "Убери лишнее."
+    - "Дай next steps по номерам."
+    - "Структурируй в буллеты."
+    - "Где конкретика?"
+    - "Слишком абстрактно."
+    - "Давай практично."
+    - "Сделай как для совета директоров."
+  philosophy_preferences:
+    wants_philosophy: true
+    traditions: [stoic, existential]
+    religious_ok: false
+  synthetic_behavior_rules:
+    reply_length: medium_or_long
+    artifact_bias: high
+    structure_required: true
+    skepticism: medium
+    mismatch_reaction: directive_rewrite_request
+    style_constraints:
+      - "требует структуру и списки"
+      - "не принимает мягкий warmup"
+      - "не любит повтор вопроса в начале"
+      - "просит next steps"
+      - "режет воду"
+
 - id: skeptical_tester_22
   title: Скептик-тестер 22
   background: Парень 22, проверяет бота на прочность

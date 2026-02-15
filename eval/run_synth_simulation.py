@@ -80,9 +80,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="Макс. диалогов (0=все)")
     parser.add_argument("--only_persona", type=str, default="", help="id персоны")
+    parser.add_argument("--persona", type=str, default="", dest="persona_alias", help="alias для --only_persona")
     parser.add_argument("--only_scenario", type=str, default="", help="id сценария")
     parser.add_argument("--out_dir", type=str, default="", help="Папка вывода")
+    parser.add_argument("--out", "--report_file", dest="report_file", type=str, default="", help="JSON отчёт")
     args = parser.parse_args()
+    if args.persona_alias:
+        args.only_persona = args.only_persona or args.persona_alias
 
     eval_dir = Path(__file__).resolve().parent
     personas_path = eval_dir / "synth_personas.yaml"
@@ -167,6 +171,23 @@ def main():
             dialog_id += 1
 
     avg_len = counts["total_len"] / counts["total_turns"] if counts["total_turns"] else 0
+    report = {
+        "persona": args.only_persona or (personas[0].get("id") if personas else ""),
+        "dialogs": dialog_id,
+        "total_turns": counts["total_turns"],
+        "explain_too_short_count": counts["explain_too_short_count"],
+        "too_short_count": counts["too_short_count"],
+        "warmup_mismatch_count": counts["warmup_mismatch_count"],
+        "context_drop_count": counts["context_drop_count"],
+        "meta_tail_count": counts["meta_tail_count"],
+        "incomplete_count": counts["incomplete_count"],
+        "avg_answer_length": round(avg_len, 1),
+        "out_dir": str(out_dir),
+    }
+    if args.report_file:
+        Path(args.report_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.report_file, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
     print("\n--- Сводка ---")
     print(f"avg_len: {avg_len:.0f}")
     print(f"too_short_count: {counts['too_short_count']}")

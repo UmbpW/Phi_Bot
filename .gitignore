@@ -7,3 +7,4 @@ dataset/*
 !dataset/README.md
 *.jsonl
 exports/
+reports/
