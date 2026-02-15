@@ -747,12 +747,16 @@ async def process_user_query(message: Message, user_text: str) -> None:
     }
     context = resolve_pattern_collisions(context)
     plan = governor_plan(user_id, stage, user_text, context, state)
-    if plan.get("stage_override"):
-        stage = plan["stage_override"]
-        USER_STAGE[user_id] = stage
-        # v20.1 Turn 1 finance route: lock lens_finance_rhythm на первом ходу
-        if turn_index == 1 and detect_financial_pattern(user_text):
-            set_active_lens(state, "lens_finance_rhythm")
+    stage = plan.get("stage_override") or stage
+    USER_STAGE[user_id] = stage
+    if plan.get("stage_override") and turn_index == 1 and detect_financial_pattern(user_text):
+        set_active_lens(state, "lens_finance_rhythm")
+    log_event(
+        "answer_first_gate",
+        user_id=user_id,
+        answer_first=plan.get("answer_first_required"),
+        stage=plan.get("stage_override"),
+    )
     if plan.get("answer_first_required"):
         _logger.info("[telemetry] answer_first=True")
     context["stage"] = stage
@@ -827,8 +831,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
         plan["force_philosophy_mode"] = False
         if DEBUG:
             print("[Phi DEBUG] guided_path=skip (long/finance) -> guidance LLM")
-    elif stage == "warmup" and not plan.get("philosophy_pipeline"):
+    elif stage == "warmup" and not plan.get("disable_warmup") and not plan.get("philosophy_pipeline"):
         # v17.2: skip warmup templates when philosophy intent — route to guidance
+        # disable_warmup=True (answer-first) → warmup-ветка не запускается
         selected_names = []
         reply_from_pattern = False
         if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):

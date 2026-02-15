@@ -60,28 +60,32 @@ def is_short_ambiguous(text: str) -> bool:
     return t in SHORT_AMBIGUOUS or (len(t) <= 3 and t.isalpha())
 
 
+FULL_Q_MARKERS = [
+    "что делать", "не понимаю", "не получается", "помоги", "как быть",
+    "как выйти", "устал", "тревож", "боюсь", "пустот", "смысл", "один",
+    "деньги", "финанс", "отношен", "выбор", "решени", "нет сил",
+    "плохо", "тупик", "завал", "депресс", "паник", "страх",
+]
+
+
 def is_full_question(text: str) -> bool:
-    """v21/v21.3: содержательный вопрос → answer-first mode.
-    Срабатывает если: len > 180 ИЛИ ≥2 маркеров."""
+    """Содержательный вопрос → answer-first mode.
+    1) len >= 220  2) len >= 160 + 2 маркера  3) len >= 160 + структура (. или ,)."""
     if not text:
         return False
-    t = (text or "").strip()
-    t_lower = t.lower()
-    if len(t) > 180:
+    t = (text or "").strip().lower()
+
+    if len(t) >= 220:
         return True
-    markers = [
-        "как выйти",
-        "что делать",
-        "не получается",
-        "тяжелой",
-        "ситуации",
-        "нет сил",
-        "все плохо",
-        "не вижу выхода",
-        "не понимаю что делать",
-    ]
-    hit = sum(1 for m in markers if m in t_lower)
-    return hit >= 2
+
+    hits = sum(1 for m in FULL_Q_MARKERS if m in t)
+    if len(t) >= 160 and hits >= 2:
+        return True
+
+    if len(t) >= 160 and (t.count(".") >= 2 or t.count(",") >= 6):
+        return True
+
+    return False
 
 
 def governor_plan(
@@ -92,25 +96,31 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
-    # v21.3 ПЕРВОЕ правило: answer-first перекрывает warmup/uncertainty/small talk
+    # Answer-first must override warmup & patterns — ПЕРВОЕ правило, до warmup/uncertainty
     if is_full_question(user_text):
-        return {
-            "add_bridge": False,
-            "disable_pattern_engine": True,
-            "disable_option_close": True,
-            "disable_fork": False,
-            "disable_warmup": True,
-            "disable_empathy_bridge": True,
-            "force_philosophy_mode": False,
-            "force_repeat_options": False,
-            "stage_override": "guidance",
-            "answer_first_required": True,
-            "philosophy_pipeline": True,
-            "allow_philosophy_examples": True,
-            "max_lenses": 3,
-            "max_practices": 1,
-            "max_questions": 1,
-        }
+        plan = {}
+        plan["stage_override"] = "guidance"
+        plan["answer_first_required"] = True
+
+        plan["disable_warmup"] = True
+        plan["disable_pattern_engine"] = True
+        plan["disable_empathy_bridge"] = True
+        plan["disable_option_close"] = True
+
+        plan["disable_fork"] = False
+
+        plan["philosophy_pipeline"] = True
+        plan["allow_philosophy_examples"] = True
+        plan["add_bridge"] = False
+        plan["force_philosophy_mode"] = False
+        plan["force_repeat_options"] = False
+
+        plan.setdefault("max_lenses", 3)
+        plan.setdefault("max_practices", 1)
+        plan.setdefault("max_questions", 1)
+
+        return plan
+
     # ТОЛЬКО ПОСЛЕ answer-first: warmup rules, uncertainty rules, small talk
     # v20.1 Warmup Hard Guard: длинные/финансовые — сразу guidance, без warmup patterns
     text_len = len((user_text or "").strip())
@@ -159,5 +169,9 @@ def governor_plan(
 
     if stage == "guidance" and ctx.get("want_fork"):
         plan["disable_option_close"] = True
+
+    # Страховка: answer_first → pattern_engine жёстко выключен
+    if plan.get("answer_first_required"):
+        plan["disable_pattern_engine"] = True
 
     return plan
