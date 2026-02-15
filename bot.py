@@ -126,6 +126,19 @@ from philosophy.practice_cooldown import (
 )
 
 BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
+
+
+def finalize_reply(text: str, plan: dict | None = None) -> str:
+    """Unified postprocess перед каждым send: strip_meta_tail → clamp_questions → completion_guard."""
+    plan = plan or {}
+    out = (text or "").strip()
+    if not out:
+        return out
+    out = strip_meta_tail(out)
+    out = clamp_questions(out, max_questions=plan.get("max_questions", 1))
+    out = meta_tail_to_fork_or_close(out, max_questions=plan.get("max_questions", 1))
+    out = completion_guard(out, max_questions=plan.get("max_questions", 1))
+    return out
 DEBUG = True
 
 # Feature flags
@@ -659,13 +672,13 @@ async def process_user_query(message: Message, user_text: str) -> None:
             state["last_bot_text"] = reply_text
             append_history(HISTORY_STORE, user_id, "assistant", reply_text)
             save_state(_state_to_persist())
-            await send_text(bot, message.chat.id, reply_text, reply_markup=FEEDBACK_KEYBOARD)
+            await send_text(bot, message.chat.id, finalize_reply(reply_text, {}), reply_markup=FEEDBACK_KEYBOARD)
             return
 
     # Safety-фильтр
     if check_safety(user_text):
         safe_text = get_safe_response()
-        await send_text(bot, message.chat.id, safe_text)
+        await send_text(bot, message.chat.id, finalize_reply(safe_text, {"max_questions": 1}))
         log_safety_event(user_id, user_text)
         return
 
@@ -689,7 +702,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
         save_state(_state_to_persist())
         if DEBUG:
             print(f"[Phi DEBUG] first_turn_gate=ON intent={intent_label}")
-        await send_text(bot, message.chat.id, gate_text, reply_markup=FEEDBACK_KEYBOARD)
+        await send_text(bot, message.chat.id, finalize_reply(gate_text, {"max_questions": 1}), reply_markup=FEEDBACK_KEYBOARD)
         return
 
     # Stage machine v8
@@ -1112,19 +1125,8 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
             reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
         reply_text = reply_text2
 
-    # PATCH 4: strip_meta_tail + clamp_questions — до completion_guard
-    reply_text = strip_meta_tail(reply_text)
-    reply_text = clamp_questions(reply_text, max_questions=plan.get("max_questions", 1))
-
-    # v21.4: meta-tail-to-fork/close — fix unfinished endings
-    reply_text = meta_tail_to_fork_or_close(
-        reply_text,
-        mode_tag=mode_tag,
-        max_questions=plan.get("max_questions", 1),
-    )
-
-    # PATCH 3: completion_guard — ПОСЛЕДНИЙ шаг (мета-фразы, диагностика, незакрытая подводка)
-    reply_text = completion_guard(reply_text, max_questions=plan.get("max_questions", 1))
+    # Unified finalize: strip_meta_tail → clamp_questions → meta_tail_to_fork_or_close → completion_guard
+    reply_text = finalize_reply(reply_text, plan)
 
     # Unified send pipeline (sanitize внутри send_text)
     save_state(_state_to_persist())
