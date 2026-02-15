@@ -88,6 +88,41 @@ STATE_TOPIC_MARKERS = (
 )
 ACTION_OPENERS = ("как ", "что делать", "что с этим", "помоги", "объясни", "расскажи", "почему")
 
+# Fix Pack D: structure/steps markers → guidance, no triage
+STRUCTURE_STEPS_MARKERS = (
+    "дай модель", "дай шаги", "по делу", "без воды", "структура", "next steps",
+    "план", "чек-лист", "приоритизируй", "только конкретика", "убери воду",
+    "модель и шаги", "без коуч", "конкретика", "по номерам",
+    "добавь философскую рамку", "философскую рамку", "не поддержка",
+)
+
+# Fix Pack D: religious markers → philosophy_pipeline, disable warmup
+RELIGIOUS_MARKERS = (
+    "бог", "господ", "грех", "молитв", "церков", "ислам", "коран", "библи",
+    "православ", "катол", "конфесс", "пастор", "имам", "священ",
+)
+
+# Fix Pack D: Buddhism/tradition switch → explain_mode + philosophy_pipeline
+BUDDHISM_SWITCH_MARKERS = (
+    "через буддийскую", "через буддизм", "буддийская оптика", "буддийск",
+    "не стоически, а", "не стоическ", "а через",
+)
+
+
+def _has_structure_steps_marker(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return any(m in t for m in STRUCTURE_STEPS_MARKERS)
+
+
+def _has_religious_marker(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return any(m in t for m in RELIGIOUS_MARKERS)
+
+
+def _has_buddhism_switch(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return any(m in t for m in BUDDHISM_SWITCH_MARKERS)
+
 
 def is_full_question(text: str) -> bool:
     """Содержательный вопрос → answer-first mode.
@@ -137,6 +172,48 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
+    # Fix Pack D: Buddhism/tradition switch → explain_mode + philosophy_pipeline (highest priority)
+    if _has_buddhism_switch(user_text):
+        return {
+            "explain_mode": True,
+            "philosophy_pipeline": True,
+            "stage_override": "guidance",
+            "disable_warmup": True,
+            "disable_pattern_engine": True,
+            "disable_option_close": True,
+            "disable_short_mode": True,
+            "answer_first_required": True,
+            "max_questions": 1,
+            "max_practices": 1,
+        }
+
+    # Fix Pack D: structure/steps markers → guidance, no triage
+    if _has_structure_steps_marker(user_text):
+        allows_phi = any(k in (user_text or "").lower() for k in ("философ", "рамк", "модель", "оптик"))
+        return {
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_warmup": True,
+            "disable_option_close": True,
+            "disable_fork": True,
+            "disable_pattern_engine": True,
+            "max_questions": 1,
+            "max_practices": 1,
+            "philosophy_pipeline": allows_phi,
+        }
+
+    # Fix Pack D: religious markers → philosophy_pipeline, disable warmup
+    if _has_religious_marker(user_text):
+        return {
+            "philosophy_pipeline": True,
+            "allow_philosophy_examples": True,
+            "stage_override": "guidance",
+            "disable_warmup": True,
+            "answer_first_required": True,
+            "disable_pattern_engine": True,
+            "max_questions": 1,
+        }
+
     # FIX C: pragmatic triggers — disable pattern_engine
     if _has_pragmatic_trigger(user_text):
         return {

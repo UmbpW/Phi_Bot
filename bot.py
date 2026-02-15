@@ -861,10 +861,15 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             phi_style = load_philosophy_style()
             if phi_style:
                 system_prompt += "\n\n---\n" + phi_style
+            # Fix Pack D: anti-too-short — floor 900 при богатом запросе
+            user_len = len((user_text or "").strip())
+            rich_request = user_len >= 80 and (stage in ("guidance", "analysis") or plan.get("answer_first_required") or plan.get("philosophy_pipeline"))
+            if rich_request and not plan.get("philosophy_pipeline") and not plan.get("explain_mode"):
+                system_prompt += "\n\nОтвет: развёрнуто, не менее 900 символов. Без ultra-short."
             if plan.get("philosophy_pipeline"):
                 system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
             if plan.get("explain_mode"):
-                expl = "\n\n---\nEXPLAIN_MODE: Развёрнутое объяснение. Структура: коротко что понял (1–2 предл.); как это устроено (2–4 предл.); два варианта/слоя если уместно; пример на случай пользователя. Практика — макс 1, только если просит советы. В конце макс ОДИН вопрос. Без списков из 10 пунктов, без «давай выберем угол». Не менее 550 символов."
+                expl = "\n\n---\nEXPLAIN_MODE: Развёрнутое объяснение. Структура: коротко что понял (1–2 предл.); как это устроено (2–4 предл.); два варианта/слоя если уместно; пример на случай пользователя. Практика — макс 1, только если просит советы. В конце макс ОДИН вопрос. Без списков из 10 пунктов, без «давай выберем угол». СТРОГО не менее 900 символов."
                 if any(k in (user_text or "").lower() for k in ("пример", "покажи", "как выглядит", "на моём случае", "на моем случае")):
                     expl += " Обязательно включи конкретный пример."
                 system_prompt += expl
@@ -875,12 +880,22 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
                 ctx = (ctx + f"\n\n[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]").strip() if ctx else f"[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]"
             guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline") and not plan.get("explain_mode") and not plan.get("disable_short_mode"):
+            # Fix Pack D: не укорачивать при rich_request / explain / philosophy
+            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline") and not plan.get("explain_mode") and not plan.get("disable_short_mode") and not rich_request:
                 reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
             if _is_existential(user_text) and stage != "guidance":
                 reply_text = _trim_existential(reply_text)
             raw_llm_text = reply_text
             reply_text = postprocess_response(reply_text, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
+            # Fix Pack D: retry expand if floor violated (rich request, answer < 900)
+            needs_floor = rich_request or plan.get("philosophy_pipeline") or plan.get("explain_mode")
+            if needs_floor and len((reply_text or "").strip()) < 900 and guidance_ctx_for_completion:
+                expand_hint = "Ответ должен быть не менее 900 символов. Разверни мысль, добавь пример или слой анализа."
+                gc = guidance_ctx_for_completion
+                ctx_expand = (gc["ctx"] + f"\n\n[требование: {expand_hint}]").strip() if gc.get("ctx") else f"[требование: {expand_hint}]"
+                reply_text2 = call_openai(gc["system_prompt"], gc["user_text"], context_block=ctx_expand)
+                if len((reply_text2 or "").strip()) >= 900:
+                    reply_text = postprocess_response(reply_text2, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
             stable_match = detect_stable_pattern(user_text)
             if should_inject(state, stage, stable_match, is_safety=False):
                 line_id = choose_philosophy_line(stable_match, user_text)
