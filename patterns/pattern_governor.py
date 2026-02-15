@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from router import detect_financial_pattern
 from utils.is_philosophy_question import is_philosophy_question as _is_philosophy_question
-from utils.intent_gate import is_philosophy_intent as _is_philosophy_intent
+from utils.intent_gate import is_expand_request, is_philosophy_intent as _is_philosophy_intent
 
 # Короткие ответы — не переспрашивать "что имел в виду"
 SHORT_AMBIGUOUS = ("оба", "все", "да", "нет", "ок", "окей", "и то и то")
@@ -121,7 +121,24 @@ def governor_plan(
 
         return plan
 
-    # ТОЛЬКО ПОСЛЕ answer-first: warmup rules, uncertainty rules, small talk
+    # PATCH 5: explain_mode — запросы на разъяснение (до warmup)
+    if is_expand_request(user_text):
+        plan = {}
+        plan["explain_mode"] = True
+        plan["stage_override"] = "guidance"
+
+        plan["disable_warmup"] = True
+        plan["disable_pattern_engine"] = True
+        plan["disable_empathy_bridge"] = True
+        plan["disable_option_close"] = True
+
+        plan["max_questions"] = 0
+        plan["max_practices"] = 1
+        plan.setdefault("max_lenses", 2)
+
+        return plan
+
+    # ТОЛЬКО ПОСЛЕ answer-first и explain: warmup rules, uncertainty rules, small talk
     # v20.1 Warmup Hard Guard: длинные/финансовые — сразу guidance, без warmup patterns
     text_len = len((user_text or "").strip())
     if text_len > 250:

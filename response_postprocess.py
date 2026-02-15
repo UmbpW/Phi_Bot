@@ -38,6 +38,7 @@ def postprocess_response(
     philosophy_pipeline: bool = False,
     mode_tag: str | None = None,
     answer_first_required: bool = False,
+    explain_mode: bool = False,
 ) -> str:
     """Ограничивает количество вопросов в ответе.
 
@@ -47,15 +48,21 @@ def postprocess_response(
     if not text or not text.strip():
         return text
 
-    # v21: practice clamp — только первая практика
-    if answer_first_required:
+    # v21: practice clamp — только первая практика (PATCH 5: + explain_mode)
+    if answer_first_required or explain_mode:
         from philosophy.practice_cooldown import clamp_to_first_practice_only
         text = clamp_to_first_practice_only(text)
 
     # v20.2: max 1 question — keep first sentence with '?', drop all later
+    # PATCH 5: explain_mode uses finalize_reply max_questions=0; здесь оставляем clamp
     text = _clamp_max_one_question(text)
 
-    ban_empathy = mode_tag == "financial_rhythm" or philosophy_pipeline or answer_first_required
+    ban_empathy = (
+        mode_tag == "financial_rhythm"
+        or philosophy_pipeline
+        or answer_first_required
+        or explain_mode
+    )
     result = _apply_style_guards(text, ban_empathy_openers=ban_empathy, answer_first=answer_first_required)
 
     if philosophy_pipeline:

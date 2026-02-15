@@ -32,6 +32,7 @@ def final_send_clamp(
     stage: str = "",
     answer_first_required: bool = False,
     philosophy_pipeline: bool = False,
+    explain_mode: bool = False,
 ) -> str:
     """Финальный clamp перед отправкой. Вызывать последним, после agency/option_close.
 
@@ -46,11 +47,12 @@ def final_send_clamp(
     if not sentences:
         return text
 
-    # A1) Ban-opener — только для financial/philosophy/answer-first
+    # A1) Ban-opener — только для financial/philosophy/answer-first/explain
     apply_ban_opener = (
         mode_tag == "financial_rhythm"
         or philosophy_pipeline
         or answer_first_required
+        or explain_mode
     )
     if apply_ban_opener and sentences:
         first_lower = sentences[0].lower().strip()

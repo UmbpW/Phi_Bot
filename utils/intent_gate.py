@@ -29,6 +29,25 @@ PHILOSOPHY_INTENT_KEYS = (
     "будд",
 )
 
+# PATCH 5: expand/explain-запросы
+EXPAND_PATTERNS = [
+    r"\b(поясни|объясни)\b",
+    r"\b(детальнее|подробнее|разверни|раскрой)\b",
+    r"\b(не понимаю|не понял|не поняла)\b",
+    r"\b(покажи|приведи пример|пример)\b",
+    r"\b(как это работает|что ты имеешь в виду)\b",
+    r"\b(разбери|разложи)\b",
+]
+
+
+def is_expand_request(text: str) -> bool:
+    """True если запрос на разъяснение/расширение — explain_mode."""
+    if not text:
+        return False
+    t = (text or "").strip().lower()
+    return any(re.search(p, t) for p in EXPAND_PATTERNS)
+
+
 # Паттерн: только выбор/смысл/нерешительность (без тревоги)
 HOW_PATTERN = re.compile(
     r".*(как|что)\s+(перестать|побороть|научиться|сделать).*"

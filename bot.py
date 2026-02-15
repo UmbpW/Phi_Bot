@@ -778,13 +778,14 @@ async def process_user_query(message: Message, user_text: str) -> None:
     context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
     context["disable_list_templates"] = plan.get("disable_list_templates", False)
     context["answer_first_required"] = plan.get("answer_first_required", False)
+    context["explain_mode"] = plan.get("explain_mode", False)
     _logger.info(
         f"[telemetry] stage={stage} "
         f"philosophy_pipeline={plan.get('philosophy_pipeline')} "
         f"force_philosophy={plan.get('force_philosophy_mode')}"
     )
-    # v19: отключить option_close для finance и philosophy
-    if plan.get("philosophy_pipeline") or detect_financial_pattern(user_text):
+    # v19: отключить option_close для finance, philosophy и explain_mode
+    if plan.get("philosophy_pipeline") or detect_financial_pattern(user_text) or plan.get("explain_mode"):
         want_option_close = False
     if DEBUG:
         print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
@@ -908,7 +909,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 selected_names = ["lens_finance_rhythm"]
                 mode_tag = "financial_rhythm"
             else:
-                max_lenses = plan.get("max_lenses", 3) if plan.get("answer_first_required") else 3
+                max_lenses = plan.get("max_lenses", 3)
                 selected_names = select_lenses(user_text, all_lenses, max_lenses=max_lenses)
                 if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
                     selected_names = [
@@ -918,6 +919,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
                     selected_names = list(dict.fromkeys(selected_names))
                 if plan.get("answer_first_required"):
                     selected_names = selected_names[:3]
+                elif plan.get("explain_mode"):
+                    selected_names = selected_names[: plan.get("max_lenses", 2)]
             lens_contents = [all_lenses.get(name, "") for name in selected_names]
             lens_contents = [c for c in lens_contents if c]
             _logger.info(f"[telemetry] mode={mode_tag or 'none'} lenses={selected_names}")
@@ -928,6 +931,17 @@ async def process_user_query(message: Message, user_text: str) -> None:
                 system_prompt += "\n\n---\n" + phi_style
             if plan.get("philosophy_pipeline"):
                 system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
+            # PATCH 5: explain_mode — разъяснение без вопросов
+            if plan.get("explain_mode"):
+                system_prompt += """
+
+---
+EXPLAIN_MODE: Отвечай разъясняюще.
+1. Коротко назови, что объясняешь (1 строка)
+2. Объясни механизм простыми словами (5–10 строк)
+3. Дай 1 конкретный пример «как это выглядит»
+4. НЕ задавай вопрос в конце (пауза)
+Запрещено: «разобрать глубже или упростить», «если хочешь продолжим», «смотреть рамку или практику»."""
             # v21.1: multi-style philosophy — несколько оптик (финансы/смысл/выбор)
             if plan.get("allow_philosophy_examples") and (
                 detect_financial_pattern(user_text)
@@ -939,6 +953,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
 v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философские оптики по теме. Формат: 2–4 предложения на оптику. Без буллетов «Школа: тезис». Без исторических справок. Без практик внутри оптик. Практика (если есть) — одним блоком после оптик. Максимум 3 школы, 1 вопрос, 1 практика."""
 
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
+            if plan.get("explain_mode"):
+                extra = f"\n\n[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]"
+                ctx = (ctx + extra).strip() if ctx else extra.strip()
             guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             raw_len = len(reply_text or "")
@@ -954,6 +971,7 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
                 philosophy_pipeline=plan.get("philosophy_pipeline", False),
                 mode_tag=mode_tag,
                 answer_first_required=plan.get("answer_first_required", False),
+                explain_mode=plan.get("explain_mode", False),
             )
             final_len = len(reply_text or "")
             _logger.info(f"[telemetry] final_len={final_len}")
@@ -1107,6 +1125,7 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
         "stage": stage,
         "answer_first_required": plan.get("answer_first_required", False),
         "philosophy_pipeline": plan.get("philosophy_pipeline", False),
+        "explain_mode": plan.get("explain_mode", False),
     }
     reply_text = final_send_clamp(reply_text, **clamp_kw)
 
@@ -1121,6 +1140,7 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
                 philosophy_pipeline=plan.get("philosophy_pipeline", False),
                 mode_tag=mode_tag,
                 answer_first_required=plan.get("answer_first_required", False),
+                explain_mode=plan.get("explain_mode", False),
             )
             reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
         reply_text = reply_text2
