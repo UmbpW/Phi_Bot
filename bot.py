@@ -37,6 +37,7 @@ from logger import (
     _get_db_conn,
     export_dialogs_from_db,
     log_dialog,
+    log_event,
     log_feedback,
     log_safety_event,
 )
@@ -368,6 +369,7 @@ def _state_to_persist() -> dict:
             "practice_cooldown_turns": state.get("practice_cooldown_turns", 0),
             "last_lens_preview_turn": state.get("last_lens_preview_turn"),
             "user_language": state.get("user_language"),
+            "onboarding_shown": state.get("onboarding_shown"),
             "last_updated": time.time(),
         }
     return out
@@ -450,8 +452,22 @@ def _load_persisted_state() -> None:
             "practice_cooldown_turns": blob.get("practice_cooldown_turns", 0),
             "last_lens_preview_turn": blob.get("last_lens_preview_turn"),
             "user_language": blob.get("user_language"),
+            "onboarding_shown": blob.get("onboarding_shown"),
         }
 
+
+ONBOARDING_MESSAGE_RU = """
+Привет. Это философский диалог-бот.
+
+Здесь можно говорить:
+— о смысле, тревоге, выборе, усталости, деньгах, отношениях
+— о философских подходах: стоицизм, экзистенциализм, буддизм и других
+— о сложных жизненных ситуациях и внутренних вопросах
+
+Я отвечаю не шаблонами и не мотивационными лозунгами — а через понятные рамки, разные философские оптики и живой разбор.
+
+Можно задать вопрос как есть — даже если он пока не очень чётко сформулирован.
+"""
 
 ABOUT_TEXT = (
     "Этот бот — секулярный философский агент поддержки.\n"
@@ -483,9 +499,11 @@ async def cmd_start(message: Message) -> None:
         "active_philosophy_line": None,
         "practice_cooldown_turns": 0,
         "last_lens_preview_turn": None,
+        "onboarding_shown": True,
     }
     save_state(_state_to_persist())
-    await send_text(bot, message.chat.id, "Привет! Я Phi Bot — AI-помощник.\nНапишите или наговорите любой вопрос.")
+    log_event("onboarding_shown", user_id=uid)
+    await send_text(bot, message.chat.id, ONBOARDING_MESSAGE_RU.strip())
 
 
 @dp.message(Command("about"))
@@ -618,6 +636,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "practice_cooldown_turns": 0,
             "last_lens_preview_turn": None,
             "user_language": None,
+            "onboarding_shown": False,
         }
         state = USER_STATE[user_id]
         if _lang_code:
@@ -688,6 +707,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "active_philosophy_line": None,
             "practice_cooldown_turns": 0,
             "last_lens_preview_turn": None,
+            "onboarding_shown": False,
         }
     state = USER_STATE[user_id]
     state["turn_index"] = state.get("turn_index", 0) + 1

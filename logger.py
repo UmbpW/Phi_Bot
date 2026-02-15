@@ -126,6 +126,22 @@ def log_feedback(
             print(f"[DB] Insert feedback error: {e}")
 
 
+def log_event(event_name: str, **kwargs) -> None:
+    """Логирует generic event в файл (events.jsonl)."""
+    ts = _ts()
+    record = {"ts": ts, "event": event_name, **kwargs}
+    # user_id для папки; если нет — в общий events.jsonl
+    user_id = kwargs.get("user_id")
+    if user_id is not None:
+        udir = _user_dir(user_id)
+        path = udir / "events.jsonl"
+    else:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        path = LOGS_DIR / "events.jsonl"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def log_safety_event(
     user_id: int,
     text_in: str,
