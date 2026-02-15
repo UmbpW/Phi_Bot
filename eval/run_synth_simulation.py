@@ -117,6 +117,7 @@ def main():
         "context_drop_count": 0,
         "meta_tail_count": 0,
         "incomplete_count": 0,
+        "explain_too_short_count": 0,
         "total_turns": 0,
         "total_len": 0,
     }
@@ -151,6 +152,8 @@ def main():
                     counts["meta_tail_count"] += 1
                 if checks.get("incomplete"):
                     counts["incomplete_count"] += 1
+                if checks.get("explain_too_short"):
+                    counts["explain_too_short_count"] += 1
                 counts["total_turns"] += 1
                 counts["total_len"] += len(reply or "")
                 prev_user = user_text
@@ -171,6 +174,7 @@ def main():
     print(f"context_drop_count: {counts['context_drop_count']}")
     print(f"meta_tail_count: {counts['meta_tail_count']}")
     print(f"incomplete_count: {counts['incomplete_count']}")
+    print(f"explain_too_short_count: {counts['explain_too_short_count']}")
     print(f"Диалогов: {dialog_id}, ходов: {counts['total_turns']}")
 
 

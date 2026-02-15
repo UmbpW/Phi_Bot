@@ -3,6 +3,13 @@
 import re
 from typing import Optional
 
+# Fix Pack B: триггеры explain без дублирования intent_gate
+_EXPLAIN_TRIGGERS = (
+    "объясни", "детальнее", "подробнее", "шире", "разверни", "разбери",
+    "разложи", "поясни", "как это работает", "покажи", "дай пример",
+    "приведи пример", "расшифруй", "раскрой",
+)
+
 
 def is_too_short(text: str, min_len: int = 350) -> bool:
     """Ответ слишком короткий."""
@@ -36,6 +43,21 @@ def looks_like_warmup_triage(text: str) -> bool:
     t = (text or "").lower()
     markers = ["три зоны", "состояние", "смысл", "опора", "выбери угол", "напиши одно слово"]
     return sum(1 for m in markers if m in t) >= 2
+
+
+def _is_explain_request(text: str) -> bool:
+    """Fix Pack B: user просит объяснить/расширить."""
+    if not text:
+        return False
+    t = (text or "").strip().lower()
+    return any(tr in t for tr in _EXPLAIN_TRIGGERS)
+
+
+def explain_too_short(user_text: str, bot_text: str, min_len: int = 550) -> bool:
+    """Fix Pack B: user просит explain, а bot ответил слишком коротко."""
+    if not _is_explain_request(user_text):
+        return False
+    return len((bot_text or "").strip()) < min_len
 
 
 def looks_like_context_drop(prev_user: str, bot_text: str) -> bool:
@@ -82,5 +104,6 @@ def run_checks(user_text: str, bot_text: str, prev_user: Optional[str] = None) -
         "warmup_triage": looks_like_warmup_triage(bot_text),
         "context_drop": looks_like_context_drop(prev_user or "", bot_text) if prev_user else False,
         "incomplete": looks_incomplete(bot_text),
+        "explain_too_short": explain_too_short(user_text or "", bot_text),
     }
     return result

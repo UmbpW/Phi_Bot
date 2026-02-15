@@ -59,7 +59,7 @@ def is_unclear_message(text: str) -> bool:
     return False
 
 
-# PATCH 5: expand/explain-запросы
+# PATCH 5 + Fix Pack B: expand/explain-запросы
 EXPAND_PATTERNS = [
     r"\b(поясни|объясни)\b",
     r"\b(детальнее|подробнее|разверни|раскрой)\b",
@@ -69,13 +69,27 @@ EXPAND_PATTERNS = [
     r"\b(разбери|разложи)\b",
 ]
 
+# Fix Pack B: EXPLAIN_REQUEST — расширенный список триггеров
+EXPLAIN_REQUEST_TRIGGERS = (
+    "объясни", "объясни детальнее", "детальнее", "подробнее", "шире", "разверни",
+    "разбери", "разложи", "на кусочки", "поясни", "как это работает",
+    "покажи", "покажи оба", "дай пример", "приведи пример", "расшифруй",
+    "не понимаю", "не понял", "не поняла", "раскрой",
+)
 
-def is_expand_request(text: str) -> bool:
-    """True если запрос на разъяснение/расширение — explain_mode."""
+
+def is_explain_request(text: str) -> bool:
+    """Fix Pack B: True если запрос на разъяснение/расширение — explain_mode.
+    Расширенный список триггеров с учётом contains."""
     if not text:
         return False
-    t = (text or "").strip().lower()
-    return any(re.search(p, t) for p in EXPAND_PATTERNS)
+    t = (text or "").strip().lower().replace("  ", " ")
+    return any(tr in t for tr in EXPLAIN_REQUEST_TRIGGERS)
+
+
+def is_expand_request(text: str) -> bool:
+    """True если запрос на разъяснение/расширение — explain_mode. Alias для is_explain_request."""
+    return is_explain_request(text)
 
 
 # Паттерн: только выбор/смысл/нерешительность (без тревоги)

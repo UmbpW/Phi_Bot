@@ -117,28 +117,33 @@ from philosophy.recommendation_pause import (
     detect_recommendation,
     apply_recommendation_pause,
 )
-from philosophy.style_guards import clamp_questions, strip_meta_tail
+from philosophy.style_guards import clamp_questions, strip_meta_tail, apply_style_guards
 from philosophy.practice_cooldown import (
     strip_practice_content,
     contains_practice,
     tick_practice_cooldown,
     COOLDOWN_AFTER_PRACTICE,
+    clamp_to_first_practice_only,
 )
 
 BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 
 
 def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
-    """Unified postprocess перед каждым send: strip_meta_tail → clamp_questions → completion_guard."""
+    """Fix Pack B: unified postprocess. clamp_questions — ПОСЛЕДНИЙ шаг.
+    Порядок: strip_meta_tail → clamp_practice → style_guards → completion_guard → meta_tail_to_fork → clamp_questions."""
     plan = plan or {}
     out = (text or "").strip()
     if not out:
         return out
     out = strip_meta_tail(out)
-    out = clamp_questions(out, max_questions=plan.get("max_questions", 1))
-    out = meta_tail_to_fork_or_close(out, max_questions=plan.get("max_questions", 1))
+    out = clamp_to_first_practice_only(out)
+    ban_empathy = plan.get("philosophy_pipeline") or plan.get("answer_first_required") or plan.get("explain_mode")
+    out = apply_style_guards(out, ban_empathy_openers=ban_empathy, answer_first=plan.get("answer_first_required", False))
     out = completion_guard(out, max_questions=plan.get("max_questions", 1))
-    return out
+    out = meta_tail_to_fork_or_close(out, max_questions=plan.get("max_questions", 1))
+    out = clamp_questions(out, max_questions=plan.get("max_questions", 1))
+    return out.strip()
 DEBUG = True
 
 # Feature flags
@@ -859,7 +864,10 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             if plan.get("philosophy_pipeline"):
                 system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
             if plan.get("explain_mode"):
-                system_prompt += "\n\n---\nEXPLAIN_MODE: Отвечай разъясняюще. Обязательно механизм + 1 пример. Не менее 2 абзацев. НЕ заканчивай вопросом."
+                expl = "\n\n---\nEXPLAIN_MODE: Развёрнутое объяснение. Структура: коротко что понял (1–2 предл.); как это устроено (2–4 предл.); два варианта/слоя если уместно; пример на случай пользователя. Практика — макс 1, только если просит советы. В конце макс ОДИН вопрос. Без списков из 10 пунктов, без «давай выберем угол». Не менее 550 символов."
+                if any(k in (user_text or "").lower() for k in ("пример", "покажи", "как выглядит", "на моём случае", "на моем случае")):
+                    expl += " Обязательно включи конкретный пример."
+                system_prompt += expl
             if plan.get("allow_philosophy_examples") and (detect_financial_pattern(user_text) or any(k in (user_text or "").lower() for k in ("смысл", "выбор", "решен", "нереш", "ценност"))):
                 system_prompt += "\n\n---\nv21.1 Multi-style: 2–3 оптики. Максимум 3 школы, 1 вопрос, 1 практика."
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))
@@ -867,7 +875,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
                 ctx = (ctx + f"\n\n[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]").strip() if ctx else f"[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]"
             guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline"):
+            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline") and not plan.get("explain_mode") and not plan.get("disable_short_mode"):
                 reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
             if _is_existential(user_text) and stage != "guidance":
                 reply_text = _trim_existential(reply_text)

@@ -69,6 +69,10 @@ PRAGMATIC_TRIGGERS = (
     "не надо философии", "без философии", "не коротко", "почему так коротко",
     "какой толк", "формальная фраза", "ты меня не слышишь",
 )
+# Fix Pack B: раздражение на короткие ответы → disable pattern + short
+IRRITATION_SHORT_TRIGGERS = (
+    "коротко", "обрывки", "формально", "шаблон",
+)
 
 FULL_Q_MARKERS = [
     "что делать", "не понимаю", "не получается", "помоги", "как быть",
@@ -189,22 +193,32 @@ def governor_plan(
 
         return plan
 
-    # PATCH 5: explain_mode — запросы на разъяснение (до warmup)
+    # PATCH 5 + Fix Pack B: explain_mode — запросы на разъяснение (до warmup)
     if is_expand_request(user_text):
         plan = {}
         plan["explain_mode"] = True
         plan["stage_override"] = "guidance"
-
         plan["disable_warmup"] = True
         plan["disable_pattern_engine"] = True
         plan["disable_empathy_bridge"] = True
         plan["disable_option_close"] = True
-
-        plan["max_questions"] = 0
+        plan["disable_short_mode"] = True
+        plan["max_questions"] = 1
         plan["max_practices"] = 1
         plan.setdefault("max_lenses", 2)
-
         return plan
+
+    # Fix Pack B: раздражение на короткие → disable pattern, no short mode
+    t_lower = (user_text or "").strip().lower()
+    if any(tr in t_lower for tr in IRRITATION_SHORT_TRIGGERS):
+        return {
+            "disable_pattern_engine": True,
+            "disable_option_close": True,
+            "disable_warmup": True,
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_short_mode": True,
+        }
 
     # Hotfix-A: direct philosophy — обход triage/orientation
     if is_direct_philosophy_intent(user_text):
