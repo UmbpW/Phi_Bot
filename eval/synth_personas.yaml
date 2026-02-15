@@ -213,3 +213,53 @@
   philosophy_preferences:
     wants_philosophy: false
     traditions: []
+
+- id: system_builder_intense
+  title: "Системный интегратор — требовательный"
+  background: >
+    Стратегический предприниматель, ориентирован на систематизацию,
+    воспроизводимые модели и глубокую связность идей. Работает волнами:
+    интенсивное погружение → пауза → переосмысление. Плохо переносит
+    поверхностность и формальные ответы. Ценит интеллектуальную плотность,
+    живое попадание в контекст и логическую структуру.
+  speaking_style:
+    verbosity: long
+    tone: analytical
+    profanity_ok: false
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: true
+    hates_repetition: true
+    hates_many_questions: false
+  goals:
+    - "получать глубокие, связные объяснения без воды"
+    - "видеть рамки и модели, применимые на практике"
+    - "тестировать идеи на воспроизводимость"
+    - "получать философский контекст, привязанный к задаче"
+    - "избегать шаблонных коуч-ответов"
+  adversarial_moves:
+    - "это слишком поверхностно"
+    - "мне нужно глубже"
+    - "это не то, о чем я спрашивал"
+    - "давай без воды"
+    - "где практическая часть?"
+    - "я это уже знаю"
+    - "не усложняй"
+    - "мне не нужно разжевывать"
+    - "это не сработает в реальности"
+    - "ты уходишь в сторону"
+  philosophy_preferences:
+    wants_philosophy: true
+    traditions: ["stoic", "existential", "buddhist", "daoist"]
+    religious_ok: false
+  synthetic_behavior_rules:
+    reply_length: medium_or_long
+    followups: depth_only
+    skepticism: high
+    mismatch_reaction: explicit_reframe_request
+    style_constraints:
+      - "не принимает короткие ответы"
+      - "раздражается от повторения вопроса в начале ответа"
+      - "просит расширение и детализацию"
+      - "указывает на потерю контекста"
