@@ -67,7 +67,7 @@ from utils.telegram_idempotency import IdempotencyMiddleware
 from utils.state_store import load_state, save_state
 from utils.short_ack import is_short_ack
 from utils.context_pack import pack_context, append_history
-from utils.intent_gate import should_skip_warmup_first_turn
+from utils.intent_gate import is_unclear_message, should_skip_warmup_first_turn
 from philosophy.first_turn_templates import render_first_turn_philosophy
 from patterns.pattern_engine import (
     load_patterns,
@@ -358,6 +358,16 @@ TOOLS_MENU = """Инструменты Phi Bot
 
 Напиши: «хочу инструмент 2» — и я разверну его."""
 
+# PATCH 6: Orientation fallback — мягкий вход для расплывчатых сообщений
+ORIENTATION_MESSAGE_RU = (
+    "Слышу, что сейчас непросто. Чтобы не стрелять советами мимо, давай выберем угол.\n\n"
+    "Обычно такие вещи лежат в одной из трёх зон:\n"
+    "— **Состояние**: тревога, усталость, злость, апатия, бессонница.\n"
+    "— **Смысл/выбор**: зачем жить, что важно, как решаться, куда идти.\n"
+    "— **Опора/мировоззрение**: во что верить, как держаться, как разные традиции смотрят на это.\n\n"
+    "Напиши одно слово: **состояние**, **смысл** или **опора** — и я продолжу в этом направлении."
+)
+
 
 def _state_to_persist() -> dict:
     """Собрать state для сохранения на диск."""
@@ -385,6 +395,7 @@ def _state_to_persist() -> dict:
             "last_lens_preview_turn": state.get("last_lens_preview_turn"),
             "user_language": state.get("user_language"),
             "onboarding_shown": state.get("onboarding_shown"),
+            "pending_orientation": state.get("pending_orientation"),
             "last_updated": time.time(),
         }
     return out
@@ -468,6 +479,7 @@ def _load_persisted_state() -> None:
             "last_lens_preview_turn": blob.get("last_lens_preview_turn"),
             "user_language": blob.get("user_language"),
             "onboarding_shown": blob.get("onboarding_shown"),
+            "pending_orientation": blob.get("pending_orientation", False),
         }
 
 
@@ -520,6 +532,7 @@ async def cmd_start(message: Message) -> None:
         "practice_cooldown_turns": 0,
         "last_lens_preview_turn": None,
         "onboarding_shown": True,
+        "pending_orientation": False,
     }
     save_state(_state_to_persist())
     log_event("onboarding_shown", user_id=uid)
@@ -728,6 +741,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "practice_cooldown_turns": 0,
             "last_lens_preview_turn": None,
             "onboarding_shown": False,
+            "pending_orientation": False,
         }
     state = USER_STATE[user_id]
     state["turn_index"] = state.get("turn_index", 0) + 1
@@ -791,6 +805,57 @@ async def process_user_query(message: Message, user_text: str) -> None:
         print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
         if plan.get("philosophy_pipeline"):
             print("[Phi DEBUG] philosophy_pipeline=ON")
+
+    # PATCH 6: Handle orientation choice (user replied after seeing orientation)
+    handled_orientation_choice = False
+    if state.get("pending_orientation"):
+        choice = (user_text or "").strip().lower()
+        state["pending_orientation"] = False
+        handled_orientation_choice = True
+        if "сост" in choice:
+            plan["stage_override"] = "guidance"
+            plan["philosophy_pipeline"] = False
+            plan["force_philosophy_mode"] = False
+        elif "смысл" in choice:
+            plan["stage_override"] = "guidance"
+            plan["philosophy_pipeline"] = True
+            plan["force_philosophy_mode"] = True
+        elif any(x in choice for x in ("опор", "миров", "вера")):
+            plan["stage_override"] = "guidance"
+            plan["philosophy_pipeline"] = True
+            plan["force_philosophy_mode"] = True
+            plan["allow_confessions"] = True
+        else:
+            plan["stage_override"] = "guidance"
+            plan["disable_warmup"] = True
+        stage = plan.get("stage_override") or stage
+        USER_STAGE[user_id] = stage
+        if DEBUG:
+            print(f"[Phi DEBUG] orientation_choice={choice[:30]}")
+
+    # PATCH 6: Orientation fallback — unclear msg, would go to warmup (priority after full_q, expand)
+    if (
+        not handled_orientation_choice
+        and is_unclear_message(user_text)
+        and stage == "warmup"
+        and not plan.get("disable_warmup")
+        and not plan.get("philosophy_pipeline")
+        and not plan.get("answer_first_required")
+        and not plan.get("explain_mode")
+    ):
+        state["pending_orientation"] = True
+        append_history(HISTORY_STORE, user_id, "user", user_text)
+        append_history(HISTORY_STORE, user_id, "assistant", ORIENTATION_MESSAGE_RU)
+        log_dialog(user_id, user_text, [], ORIENTATION_MESSAGE_RU)
+        state["last_user_text"] = user_text
+        state["last_bot_text"] = ORIENTATION_MESSAGE_RU
+        save_state(_state_to_persist())
+        await send_text(
+            bot, message.chat.id,
+            finalize_reply(ORIENTATION_MESSAGE_RU, {"max_questions": 1}),
+            reply_markup=FEEDBACK_KEYBOARD,
+        )
+        return
 
     # v17 Lens choice: после lens preview пользователь выбрал линию → lock
     last_preview = state.get("last_lens_preview_turn")

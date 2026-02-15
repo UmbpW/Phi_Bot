@@ -29,6 +29,36 @@ PHILOSOPHY_INTENT_KEYS = (
     "будд",
 )
 
+# PATCH 6: turbid/unclear — общие "плохо/устал/пусто" без явной темы
+UNCLEAR_MARKERS = [
+    "плохо", "устал", "пусто", "не хочу", "ничего не хочу", "ничего не работает",
+    "тяжело", "херово", "пипец", "завал", "не могу", "не понимаю", "всё бессмысленно",
+    "нет сил", "опустош", "тревож", "страшно", "один", "одна",
+]
+
+TOPIC_MARKERS = [
+    "деньг", "финанс", "сон", "работ", "отношен", "любов", "смерт", "здоров",
+    "тело", "проект", "долг", "кредит", "аренд", "родител", "ребен", "семь",
+]
+
+
+def is_unclear_message(text: str) -> bool:
+    """True если короткий/расплывчатый вход без конкретной темы → orientation fallback."""
+    if not text:
+        return True
+    t = (text or "").strip().lower()
+
+    if len(t) >= 160:
+        return False
+    if any(m in t for m in TOPIC_MARKERS):
+        return False
+    if len(t) <= 70:
+        return True
+    if any(m in t for m in UNCLEAR_MARKERS):
+        return True
+    return False
+
+
 # PATCH 5: expand/explain-запросы
 EXPAND_PATTERNS = [
     r"\b(поясни|объясни)\b",
