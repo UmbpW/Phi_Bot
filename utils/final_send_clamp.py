@@ -154,3 +154,81 @@ def meta_tail_to_fork_or_close(
     if q_count < max_questions:
         return (base + "\n\n" + random.choice(GENERAL_FORK_POOL)).strip()
     return (base + "\n\n" + random.choice(FINANCE_CLOSE_POOL)).strip()
+
+
+# PATCH 3: Completion Guard — мета-фразы, диагностика, незакрытая подводка
+META_TAIL_TRIGGERS = [
+    "важно понять",
+    "нужно понять",
+    "чтобы не давать",
+    "чтобы не гадать",
+    "давай уточним",
+    "уточню одно",
+    "уточни, пожалуйста",
+    "если хочешь — продолжим",
+    "если хочешь продолжим",
+    "разобрать глубже или упростить",
+    "смотреть рамку или практику",
+]
+
+DIAGNOSTIC_TAIL_TRIGGERS = [
+    "сейчас звучит так",
+    "похоже, сейчас",
+    "похоже сейчас",
+    "выглядит так",
+    "будто страдает",
+    "и это изматывает",
+    "но сейчас",
+]
+
+FORK_QUESTION_POOL_P3 = [
+    "Что в этом сейчас главнее: страх, что поток может сорваться, или раздражение от непредсказуемых дыр и трат?",
+    "Это больше про непредсказуемость будущего или про ощущение, что контроль ускользает?",
+    "Если выбрать одну точку: тебя сильнее держит страх потери опоры или усталость от постоянной необходимости «добывать»?",
+]
+
+CLOSE_SENTENCE_POOL_P3 = [
+    "На этом месте достаточно просто увидеть узел яснее — без рывка и без давления.",
+    "Иногда уже одно различение того, что именно болит, возвращает немного опоры.",
+    "Пока не нужно решать всё сразу: важно, что ты уже описал структуру проблемы, а не просто чувство.",
+]
+
+
+def _tail_p3(text: str, n: int = 280) -> str:
+    t = (text or "").strip().lower()
+    return t[-n:] if len(t) > n else t
+
+
+def _ends_with_trigger_p3(text: str) -> bool:
+    tail = _tail_p3(text)
+    return any(x in tail for x in META_TAIL_TRIGGERS) or any(x in tail for x in DIAGNOSTIC_TAIL_TRIGGERS)
+
+
+def _strip_last_sentence_p3(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return s
+    parts = re.split(r"(?<=[.!?…])\s+", s)
+    if len(parts) <= 1:
+        return s
+    return " ".join(parts[:-1]).strip()
+
+
+def completion_guard(text: str, max_questions: int = 1) -> str:
+    """PATCH 3: Если хвост — мета-фраза, диагностика или незакрытая подводка → fork или close."""
+    s = (text or "").strip()
+    if not s:
+        return s
+
+    if not _ends_with_trigger_p3(s):
+        return s
+
+    base = _strip_last_sentence_p3(s)
+
+    if len(base) < 200:
+        base = s
+
+    qn = (base or "").count("?")
+    if qn < max_questions:
+        return (base + "\n\n" + random.choice(FORK_QUESTION_POOL_P3)).strip()
+    return (base + "\n\n" + random.choice(CLOSE_SENTENCE_POOL_P3)).strip()

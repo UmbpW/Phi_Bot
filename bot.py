@@ -56,6 +56,7 @@ from prompt_loader import load_file
 from response_postprocess import postprocess_response
 from utils.final_send_clamp import (
     add_closing_sentence,
+    completion_guard,
     final_send_clamp,
     looks_incomplete,
     meta_tail_to_fork_or_close,
@@ -1110,12 +1111,15 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
             reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
         reply_text = reply_text2
 
-    # v21.4: meta-tail-to-fork/close — последний шаг перед send (fix unfinished endings)
+    # v21.4: meta-tail-to-fork/close — fix unfinished endings
     reply_text = meta_tail_to_fork_or_close(
         reply_text,
         mode_tag=mode_tag,
         max_questions=plan.get("max_questions", 1),
     )
+
+    # PATCH 3: completion_guard — ПОСЛЕДНИЙ шаг (мета-фразы, диагностика, незакрытая подводка)
+    reply_text = completion_guard(reply_text, max_questions=plan.get("max_questions", 1))
 
     # Unified send pipeline (sanitize внутри send_text)
     save_state(_state_to_persist())
