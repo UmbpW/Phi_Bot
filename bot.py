@@ -200,8 +200,11 @@ OPENAI_MODEL = (os.getenv("OPENAI_MODEL") or "gpt-5.2").strip()
 DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 EXPORT_TOKEN = (os.getenv("EXPORT_TOKEN") or "").strip()
 
-if not TELEGRAM_TOKEN:
+if not os.getenv("PHI_EVAL") and not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN не задан в .env")
+# Eval mode: placeholder token (9 digits:35 chars) — бот не используется для отправки
+if os.getenv("PHI_EVAL") and not TELEGRAM_TOKEN:
+    TELEGRAM_TOKEN = "111111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY не задан в .env")
 
@@ -638,6 +641,325 @@ def _maybe_suggest_philosophy_match(
     return "Кажется, тебе может откликнуться такая философская оптика:\n\n" + text
 
 
+def generate_reply_core(user_id: int, user_text: str) -> dict:
+    """Headless pipeline: router → lenses → postprocess → completion_guard.
+
+    Возвращает: {"reply_text": str, "telemetry": dict, "mode": str|None, "stage": str|None}
+    Использует глобальные USER_STATE, HISTORY_STORE, USER_STAGE, USER_MSG_COUNT, LAST_LENS_BY_USER.
+    Вызывается из process_user_query и из eval/run_synth_simulation.
+    """
+    if not user_text:
+        return {"reply_text": "Не удалось распознать текст.", "telemetry": {}, "mode": None, "stage": None}
+
+    state = USER_STATE.get(user_id)
+    if not state:
+        return {"reply_text": "[Ошибка: нет state]", "telemetry": {}, "mode": None, "stage": None}
+
+    if is_short_ack(user_text) and state.get("pending"):
+        reply_text = _execute_pending_follow_through(user_id, user_text, state)
+        if reply_text:
+            append_history(HISTORY_STORE, user_id, "user", user_text)
+            state["last_user_text"] = user_text
+            state["last_bot_text"] = reply_text
+            append_history(HISTORY_STORE, user_id, "assistant", reply_text)
+            return {"reply_text": finalize_reply(reply_text, {}), "telemetry": {"stage": "guidance"}, "mode": None, "stage": "guidance"}
+
+    if check_safety(user_text):
+        safe_text = get_safe_response()
+        return {"reply_text": finalize_reply(safe_text, {"max_questions": 1}), "telemetry": {"stage": "safety"}, "mode": None, "stage": "safety"}
+
+    history_count = len(HISTORY_STORE.get(user_id, []))
+    current_stage = USER_STAGE.get(user_id)
+    if should_skip_warmup_first_turn(state, user_text, history_count, current_stage):
+        gate_text, _ = render_first_turn_philosophy(user_text)
+        gate_text = enforce_constraints(gate_text, "guidance", load_patterns().get("global_constraints", {}))
+        USER_STAGE[user_id] = "guidance"
+        USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
+        state["turn_index"] = state.get("turn_index", 0) + 1
+        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
+        append_history(HISTORY_STORE, user_id, "user", user_text)
+        append_history(HISTORY_STORE, user_id, "assistant", gate_text)
+        state["last_user_text"] = user_text
+        state["last_bot_text"] = gate_text
+        return {"reply_text": finalize_reply(gate_text, {"max_questions": 1}), "telemetry": {"stage": "guidance", "first_turn_gate": True}, "mode": None, "stage": "guidance"}
+
+    USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
+    stage = _get_stage(user_id, user_text)
+    USER_STAGE[user_id] = stage
+    turn_index = state.get("turn_index", 0) + 1
+    state["turn_index"] = turn_index
+
+    text_lower = (user_text or "").lower()
+    is_resistance = any(tr in text_lower for tr in RESISTANCE_TRIGGERS)
+    is_confusion = any(tr in text_lower for tr in CONFUSION_TRIGGERS)
+    want_fork = detect_financial_pattern(user_text)
+    want_option_close = ENABLE_SESSION_CLOSE_CHOICE and stage == "guidance" and not (user_text or "").rstrip().endswith("?")
+
+    context = {"stage": stage, "user_text_len": len((user_text or "").strip()), "is_safety": False, "is_resistance": is_resistance, "is_confusion": is_confusion, "want_fork": want_fork, "want_option_close": want_option_close, "enable_philosophy_match": ENABLE_PHILOSOPHY_MATCH}
+    context = resolve_pattern_collisions(context)
+    plan = governor_plan(user_id, stage, user_text, context, state)
+    stage = plan.get("stage_override") or stage
+    USER_STAGE[user_id] = stage
+
+    if state.get("orientation_lock"):
+        plan["disable_fork"] = True
+        plan["disable_pattern_engine"] = True
+
+    context["stage"] = stage
+    context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
+    context["disable_list_templates"] = plan.get("disable_list_templates", False)
+    context["answer_first_required"] = plan.get("answer_first_required", False)
+    context["explain_mode"] = plan.get("explain_mode", False)
+
+    if plan.get("philosophy_pipeline") or detect_financial_pattern(user_text) or plan.get("explain_mode"):
+        want_option_close = False
+
+    handled_orientation_choice = False
+    if state.get("pending_orientation"):
+        choice = (user_text or "").strip().lower()
+        state["pending_orientation"] = False
+        state["orientation_lock"] = True
+        handled_orientation_choice = True
+        if "сост" in choice:
+            plan["stage_override"] = "guidance"
+            plan["philosophy_pipeline"] = False
+            plan["force_philosophy_mode"] = False
+        elif "смысл" in choice:
+            plan["stage_override"] = "guidance"
+            plan["philosophy_pipeline"] = True
+            plan["force_philosophy_mode"] = True
+        elif any(x in choice for x in ("опор", "миров", "вера")):
+            plan["stage_override"] = "guidance"
+            plan["philosophy_pipeline"] = True
+            plan["force_philosophy_mode"] = True
+            plan["allow_confessions"] = True
+        else:
+            plan["stage_override"] = "guidance"
+            plan["disable_warmup"] = True
+        plan["disable_fork"] = True
+        plan["disable_pattern_engine"] = True
+        stage = plan.get("stage_override") or stage
+        USER_STAGE[user_id] = stage
+
+    if (
+        not handled_orientation_choice
+        and not plan.get("force_philosophy_mode")
+        and is_unclear_message(user_text)
+        and stage == "warmup"
+        and not plan.get("disable_warmup")
+        and not plan.get("philosophy_pipeline")
+        and not plan.get("answer_first_required")
+        and not plan.get("explain_mode")
+    ):
+        state["pending_orientation"] = True
+        append_history(HISTORY_STORE, user_id, "user", user_text)
+        append_history(HISTORY_STORE, user_id, "assistant", ORIENTATION_MESSAGE_RU)
+        state["last_user_text"] = user_text
+        state["last_bot_text"] = ORIENTATION_MESSAGE_RU
+        return {"reply_text": finalize_reply(ORIENTATION_MESSAGE_RU, {"max_questions": 1}), "telemetry": {"stage": "warmup", "orientation": True}, "mode": None, "stage": "warmup"}
+
+    mode_tag = None
+    selected_names = []
+    pattern_id = None
+    forbid_practice = False
+    injection_this_turn = False
+    has_reco = False
+    guidance_ctx_for_completion = None
+    reply_text = ""
+
+    last_preview = state.get("last_lens_preview_turn")
+    if last_preview is not None and turn_index - 1 == last_preview and stage == "guidance":
+        chosen = detect_lens_choice(user_text)
+        if chosen:
+            set_active_lens(state, chosen)
+            state["last_lens_preview_turn"] = None
+            plan["force_philosophy_mode"] = False
+
+    if plan.get("force_repeat_options") and state.get("last_options"):
+        opts = state["last_options"]
+        if isinstance(opts, list) and len(opts) >= 2:
+            reply_text = "Ок, начнём с (1), потом перейдём к (2). С какого?"
+        elif opts:
+            line = opts[0] if isinstance(opts, list) else opts
+            reply_text = f"Ок. {line} — с какого начнём?"
+        else:
+            reply_text = "Уточни, пожалуйста — с чего начать?"
+        want_option_close = False
+    elif plan.get("force_philosophy_mode") and not get_active_lens(state) and len((user_text or "").strip()) <= 250 and not detect_financial_pattern(user_text):
+        reply_text = render_lens_preview("guidance" if detect_lens_preview_need(user_text) else "default") + "\n\n" + render_lens_soft_question()
+        reply_text = enforce_constraints(reply_text, "guidance", load_patterns().get("global_constraints", {}))
+        state["last_lens_preview_turn"] = turn_index
+        want_option_close = False
+    elif plan.get("force_philosophy_mode") and not get_active_lens(state) and (len((user_text or "").strip()) > 250 or detect_financial_pattern(user_text)):
+        plan["force_philosophy_mode"] = False
+    elif stage == "warmup" and not plan.get("disable_warmup") and not plan.get("philosophy_pipeline"):
+        selected_names = []
+        reply_from_pattern = False
+        if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
+            pattern = choose_pattern("warmup", context)
+            if pattern:
+                pattern_id = pattern.get("id", "")
+                reply_text = render_pattern(pattern, context)
+                reply_text = enforce_constraints(reply_text, "warmup", load_patterns().get("global_constraints", {}))
+                state["last_bridge_turn"] = turn_index
+                reply_from_pattern = True
+            else:
+                ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))
+                reply_text = call_openai(load_warmup_prompt(), user_text, context_block=ctx)
+                reply_text = postprocess_response(reply_text, stage)
+        else:
+            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))
+            reply_text = call_openai(load_warmup_prompt(), user_text, context_block=ctx)
+            reply_text = postprocess_response(reply_text, stage)
+        if reply_from_pattern and reply_text and len((reply_text or "").strip()) < 120 and "?" not in reply_text and "\n\n" not in reply_text:
+            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))
+            reply_text = call_openai(load_warmup_prompt(), user_text, context_block=ctx)
+            reply_text = postprocess_response(reply_text, stage)
+    else:
+        if plan.get("philosophy_pipeline"):
+            USER_STAGE[user_id] = "guidance"
+            stage = "guidance"
+        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
+        term = is_term_question(user_text)
+        if term:
+            reply_text = term_example_first(term, {"user_text": user_text})
+            reply_text = enforce_constraints(reply_text, "guidance", load_patterns().get("global_constraints", {}))
+            want_option_close = False
+        else:
+            raw_llm_text = ""
+            main_prompt = load_system_prompt()
+            all_lenses = load_all_lenses()
+            active_lens = get_active_lens(state)
+            if active_lens and active_lens in LENS_TO_SYSTEM_ID:
+                selected_names = [LENS_TO_SYSTEM_ID[active_lens]]
+            elif detect_financial_pattern(user_text):
+                selected_names = ["lens_finance_rhythm"]
+                mode_tag = "financial_rhythm"
+            else:
+                selected_names = select_lenses(user_text, all_lenses, max_lenses=plan.get("max_lenses", 3))
+                if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
+                    selected_names = ["lens_control_scope" if n == "lens_general" else n for n in selected_names]
+                    selected_names = list(dict.fromkeys(selected_names))
+                if plan.get("answer_first_required"):
+                    selected_names = selected_names[:3]
+                elif plan.get("explain_mode"):
+                    selected_names = selected_names[: plan.get("max_lenses", 2)]
+            lens_contents = [all_lenses.get(n, "") for n in selected_names]
+            lens_contents = [c for c in lens_contents if c]
+            system_prompt = build_system_prompt(main_prompt, lens_contents)
+            system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
+            if state.get("force_expand_next"):
+                system_prompt += "\n\n---\nforce_expand_next: Дай развёрнутый ответ с объяснением и примером. Не менее 2 абзацев."
+                state["force_expand_next"] = False
+            phi_style = load_philosophy_style()
+            if phi_style:
+                system_prompt += "\n\n---\n" + phi_style
+            if plan.get("philosophy_pipeline"):
+                system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
+            if plan.get("explain_mode"):
+                system_prompt += "\n\n---\nEXPLAIN_MODE: Отвечай разъясняюще. Обязательно механизм + 1 пример. Не менее 2 абзацев. НЕ заканчивай вопросом."
+            if plan.get("allow_philosophy_examples") and (detect_financial_pattern(user_text) or any(k in (user_text or "").lower() for k in ("смысл", "выбор", "решен", "нереш", "ценност"))):
+                system_prompt += "\n\n---\nv21.1 Multi-style: 2–3 оптики. Максимум 3 школы, 1 вопрос, 1 практика."
+            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))
+            if plan.get("explain_mode"):
+                ctx = (ctx + f"\n\n[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]").strip() if ctx else f"[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]"
+            guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
+            reply_text = call_openai(system_prompt, user_text, context_block=ctx)
+            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline"):
+                reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
+            if _is_existential(user_text) and stage != "guidance":
+                reply_text = _trim_existential(reply_text)
+            raw_llm_text = reply_text
+            reply_text = postprocess_response(reply_text, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
+            stable_match = detect_stable_pattern(user_text)
+            if should_inject(state, stage, stable_match, is_safety=False):
+                line_id = choose_philosophy_line(stable_match, user_text)
+                injection = render_injection(line_id)
+                reply_text = insert_injection_after_first_paragraph(reply_text, injection)
+                mark_injection_done(state)
+                state["active_philosophy_line"] = line_id
+                injection_this_turn = True
+            forbid_practice = state.get("practice_cooldown_turns", 0) > 0 or injection_this_turn
+            if forbid_practice:
+                reply_text = strip_practice_content(reply_text)
+            if handle_i_dont_understand(user_text):
+                reply_text = replace_clarifying_with_example(reply_text)
+            if not should_ask_question(user_id, state):
+                reply_text = remove_questions(reply_text)
+            has_reco = stage != "safety" and detect_recommendation(reply_text)
+            if has_reco:
+                forbid_practice = True
+                reply_text = strip_practice_content(reply_text)
+            fork_allowed = fork_density_guard(user_id, state)
+            context["mode_tag"] = mode_tag
+            if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
+                constraints = load_patterns().get("global_constraints", {})
+                prefix, bridge_cat = build_ux_prefix("guidance", context, state) if plan.get("add_bridge") else (None, None)
+                if bridge_cat:
+                    state["last_bridge_category"] = bridge_cat
+                    state["last_bridge_turn"] = turn_index
+                stripped = strip_echo_first_line(reply_text)
+                if prefix and stripped != reply_text:
+                    reply_text = prefix + "\n\n" + stripped
+                elif stripped != reply_text:
+                    reply_text = stripped
+                if want_option_close and not plan.get("disable_option_close") and not plan.get("disable_fork") and fork_allowed and not has_reco:
+                    opt_line = get_option_close_line()
+                    reply_text = reply_text.rstrip() + "\n\n" + opt_line
+                    state["last_options"] = [opt_line]
+                    state["pending"] = {"kind": "fork", "options": ["1", "2"], "default": "1", "prompt": opt_line, "created_turn": turn_index}
+                reply_text = enforce_constraints(reply_text, "guidance", constraints, plan)
+            else:
+                if want_option_close and not plan.get("disable_option_close") and not plan.get("disable_fork") and fork_allowed and not has_reco:
+                    opt_line = get_option_close_line()
+                    reply_text = reply_text.rstrip() + "\n\n" + opt_line
+                    state["last_options"] = [opt_line]
+                    state["pending"] = {"kind": "fork", "options": ["1", "2"], "default": "1", "prompt": opt_line, "created_turn": turn_index}
+            if plan.get("answer_first_required") and len(reply_text or "") < 180 and raw_llm_text:
+                reply_text = raw_llm_text
+
+    if stage == "guidance" and selected_names:
+        LAST_LENS_BY_USER[user_id] = selected_names
+    if not plan.get("force_philosophy_mode"):
+        pm_suggestion = _maybe_suggest_philosophy_match(user_id, stage, is_safety=False)
+        if pm_suggestion:
+            reply_text = reply_text.rstrip() + "\n\n" + pm_suggestion
+    if want_option_close and not plan.get("disable_fork") and not (ENABLE_PATTERN_ENGINE and stage == "guidance") and not has_reco:
+        reply_text = reply_text.rstrip() + "\n\nХочешь продолжить: (1) про причины или (2) про следующий шаг?"
+    if stage in ("warmup", "guidance"):
+        reply_text, _ = strip_meta_format_questions(reply_text)
+    if has_reco and stage != "safety":
+        reply_text = apply_recommendation_pause(reply_text)
+        state["practice_cooldown_turns"] = max(state.get("practice_cooldown_turns", 0), 2)
+    if stage == "guidance":
+        if contains_practice(reply_text) and not forbid_practice:
+            state["practice_cooldown_turns"] = COOLDOWN_AFTER_PRACTICE
+        tick_practice_cooldown(state)
+        tick_lens_lock(state)
+    append_history(HISTORY_STORE, user_id, "user", user_text)
+    append_history(HISTORY_STORE, user_id, "assistant", reply_text)
+    state["last_user_text"] = user_text
+    state["last_bot_text"] = reply_text
+    clamp_kw = {"mode_tag": mode_tag, "stage": stage, "answer_first_required": plan.get("answer_first_required", False), "philosophy_pipeline": plan.get("philosophy_pipeline", False), "explain_mode": plan.get("explain_mode", False)}
+    reply_text = final_send_clamp(reply_text, **clamp_kw)
+    if stage == "guidance" and looks_incomplete(reply_text):
+        reply_text2 = add_closing_sentence(reply_text)
+        reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
+        if looks_incomplete(reply_text2) and guidance_ctx_for_completion:
+            gc = guidance_ctx_for_completion
+            reply_text2 = call_openai(gc["system_prompt"], gc["user_text"], context_block=gc["ctx"])
+            reply_text2 = postprocess_response(reply_text2, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
+            reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
+        reply_text = reply_text2
+    reply_text = finalize_reply(reply_text, plan)
+    if stage == "guidance" and len((reply_text or "").strip()) < 280:
+        state["force_expand_next"] = True
+    if state.get("orientation_lock"):
+        state["orientation_lock"] = False
+    telemetry = {"stage": stage, "mode_tag": mode_tag, "lenses": selected_names, "pattern_id": pattern_id}
+    return {"reply_text": reply_text, "telemetry": telemetry, "mode": mode_tag, "stage": stage}
+
+
 async def process_user_query(message: Message, user_text: str) -> None:
     """Обрабатывает текст пользователя (общая логика для текста и голоса)."""
     user_id = message.from_user.id if message.from_user else 0
@@ -674,575 +996,22 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "last_lens_preview_turn": None,
             "user_language": None,
             "onboarding_shown": False,
+            "pending_orientation": False,
+            "orientation_lock": False,
         }
         state = USER_STATE[user_id]
         if _lang_code:
             from philosophy.source_rule import get_user_language
             state["user_language"] = get_user_language(_lang_code)
 
-    # Pending follow-through: short_ack продолжает предыдущий контекст
-    if state and is_short_ack(user_text) and state.get("pending"):
-        reply_text = _execute_pending_follow_through(user_id, user_text, state)
-        if reply_text:
-            append_history(HISTORY_STORE, user_id, "user", user_text)
-            state["last_user_text"] = user_text
-            state["last_bot_text"] = reply_text
-            append_history(HISTORY_STORE, user_id, "assistant", reply_text)
-            save_state(_state_to_persist())
-            await send_text(bot, message.chat.id, finalize_reply(reply_text, {}), reply_markup=FEEDBACK_KEYBOARD)
-            return
+    # Core pipeline (общий для bot и eval)
+    result = generate_reply_core(user_id, user_text)
+    reply_text = result.get("reply_text", "")
 
-    # Safety-фильтр
-    if check_safety(user_text):
-        safe_text = get_safe_response()
-        await send_text(bot, message.chat.id, finalize_reply(safe_text, {"max_questions": 1}))
+    if result.get("stage") == "safety":
         log_safety_event(user_id, user_text)
-        return
-
-    # First Turn Philosophy Gate v15: философский intent → answer-first, без generic warmup
-    history_count = len(HISTORY_STORE.get(user_id, []))
-    current_stage = USER_STAGE.get(user_id)
-    if should_skip_warmup_first_turn(state, user_text, history_count, current_stage):
-        gate_text, intent_label = render_first_turn_philosophy(user_text)
-        gate_text = enforce_constraints(
-            gate_text, "guidance", load_patterns().get("global_constraints", {})
-        )
-        USER_STAGE[user_id] = "guidance"
-        USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
-        state["turn_index"] = state.get("turn_index", 0) + 1
-        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
-        append_history(HISTORY_STORE, user_id, "user", user_text)
-        append_history(HISTORY_STORE, user_id, "assistant", gate_text)
-        state["last_user_text"] = user_text
-        state["last_bot_text"] = gate_text
-        log_dialog(user_id, user_text, [], gate_text)
-        save_state(_state_to_persist())
-        if DEBUG:
-            print(f"[Phi DEBUG] first_turn_gate=ON intent={intent_label}")
-        await send_text(bot, message.chat.id, finalize_reply(gate_text, {"max_questions": 1}), reply_markup=FEEDBACK_KEYBOARD)
-        return
-
-    # Stage machine v8
-    USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
-    stage = _get_stage(user_id, user_text)
-    USER_STAGE[user_id] = stage
-
-    # Governor state v12 + v17 schema
-    if user_id not in USER_STATE:
-        USER_STATE[user_id] = {
-            "turn_index": 0,
-            "last_bridge_turn": -10,
-            "last_options": None,
-            "guidance_turns_count": 0,
-            "last_fork_turn": -10,
-            "pending": None,
-            "last_user_text": "",
-            "last_bot_text": "",
-            "active_lens": None,
-            "lens_lock_turns_left": 0,
-            "last_injection_turn": -10,
-            "active_philosophy_line": None,
-            "practice_cooldown_turns": 0,
-            "last_lens_preview_turn": None,
-            "onboarding_shown": False,
-            "pending_orientation": False,
-            "orientation_lock": False,
-        }
-    state = USER_STATE[user_id]
-    state["turn_index"] = state.get("turn_index", 0) + 1
-    turn_index = state["turn_index"]
-
-    mode_tag = None
-    selected_names = []
-    pattern_id = None
-    forbid_practice = False
-    injection_this_turn = False
-    has_reco = False
-    guidance_ctx_for_completion = None  # v21.2: для completion guard регенерации
-
-    text_lower = (user_text or "").lower()
-    is_resistance = any(tr in text_lower for tr in RESISTANCE_TRIGGERS)
-    is_confusion = any(tr in text_lower for tr in CONFUSION_TRIGGERS)
-    want_fork = detect_financial_pattern(user_text)
-    want_option_close = (
-        ENABLE_SESSION_CLOSE_CHOICE
-        and stage == "guidance"
-        and not (user_text or "").rstrip().endswith("?")
-    )
-    context = {
-        "stage": stage,
-        "user_text_len": len((user_text or "").strip()),
-        "is_safety": False,
-        "is_resistance": is_resistance,
-        "is_confusion": is_confusion,
-        "want_fork": want_fork,
-        "want_option_close": want_option_close,
-        "enable_philosophy_match": ENABLE_PHILOSOPHY_MATCH,
-    }
-    context = resolve_pattern_collisions(context)
-    plan = governor_plan(user_id, stage, user_text, context, state)
-    stage = plan.get("stage_override") or stage
-    USER_STAGE[user_id] = stage
-    if plan.get("stage_override") and turn_index == 1 and detect_financial_pattern(user_text):
-        set_active_lens(state, "lens_finance_rhythm")
-    log_event(
-        "answer_first_gate",
-        user_id=user_id,
-        answer_first=plan.get("answer_first_required"),
-        stage=plan.get("stage_override"),
-    )
-    if plan.get("answer_first_required"):
-        _logger.info("[telemetry] answer_first=True")
-    # FIX-3: orientation_lock — нет повторной воронки после выбора
-    if state.get("orientation_lock"):
-        plan["disable_fork"] = True
-        plan["disable_pattern_engine"] = True
-    context["stage"] = stage
-    context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
-    context["disable_list_templates"] = plan.get("disable_list_templates", False)
-    context["answer_first_required"] = plan.get("answer_first_required", False)
-    context["explain_mode"] = plan.get("explain_mode", False)
-    _logger.info(
-        f"[telemetry] stage={stage} "
-        f"philosophy_pipeline={plan.get('philosophy_pipeline')} "
-        f"force_philosophy={plan.get('force_philosophy_mode')}"
-    )
-    # v19: отключить option_close для finance, philosophy и explain_mode
-    if plan.get("philosophy_pipeline") or detect_financial_pattern(user_text) or plan.get("explain_mode"):
-        want_option_close = False
-    if DEBUG:
-        print(f"[Phi DEBUG] plan={plan} turn={turn_index}")
-        if plan.get("philosophy_pipeline"):
-            print("[Phi DEBUG] philosophy_pipeline=ON")
-
-    # PATCH 6: Handle orientation choice (user replied after seeing orientation)
-    handled_orientation_choice = False
-    if state.get("pending_orientation"):
-        choice = (user_text or "").strip().lower()
-        state["pending_orientation"] = False
-        state["orientation_lock"] = True  # FIX-3: depth lock — нет повторной воронки
-        state["orientation_lock_turns"] = 1
-        handled_orientation_choice = True
-        if "сост" in choice:
-            plan["stage_override"] = "guidance"
-            plan["philosophy_pipeline"] = False
-            plan["force_philosophy_mode"] = False
-        elif "смысл" in choice:
-            plan["stage_override"] = "guidance"
-            plan["philosophy_pipeline"] = True
-            plan["force_philosophy_mode"] = True
-        elif any(x in choice for x in ("опор", "миров", "вера")):
-            plan["stage_override"] = "guidance"
-            plan["philosophy_pipeline"] = True
-            plan["force_philosophy_mode"] = True
-            plan["allow_confessions"] = True
-        else:
-            plan["stage_override"] = "guidance"
-            plan["disable_warmup"] = True
-        # FIX-3: не задавать fork сразу после выбора ориентации
-        plan["disable_fork"] = True
-        plan["disable_pattern_engine"] = True
-        stage = plan.get("stage_override") or stage
-        USER_STAGE[user_id] = stage
-        if DEBUG:
-            print(f"[Phi DEBUG] orientation_choice={choice[:30]}")
-
-    # PATCH 6: Orientation fallback — unclear msg, would go to warmup (priority after full_q, expand)
-    # Hotfix-A: skip triage при force_philosophy_mode
-    if (
-        not handled_orientation_choice
-        and not plan.get("force_philosophy_mode")
-        and is_unclear_message(user_text)
-        and stage == "warmup"
-        and not plan.get("disable_warmup")
-        and not plan.get("philosophy_pipeline")
-        and not plan.get("answer_first_required")
-        and not plan.get("explain_mode")
-    ):
-        state["pending_orientation"] = True
-        append_history(HISTORY_STORE, user_id, "user", user_text)
-        append_history(HISTORY_STORE, user_id, "assistant", ORIENTATION_MESSAGE_RU)
-        log_dialog(user_id, user_text, [], ORIENTATION_MESSAGE_RU)
-        state["last_user_text"] = user_text
-        state["last_bot_text"] = ORIENTATION_MESSAGE_RU
-        save_state(_state_to_persist())
-        await send_text(
-            bot, message.chat.id,
-            finalize_reply(ORIENTATION_MESSAGE_RU, {"max_questions": 1}),
-            reply_markup=FEEDBACK_KEYBOARD,
-        )
-        return
-
-    # v17 Lens choice: после lens preview пользователь выбрал линию → lock
-    last_preview = state.get("last_lens_preview_turn")
-    if (
-        last_preview is not None
-        and turn_index - 1 == last_preview
-        and stage == "guidance"
-    ):
-        chosen = detect_lens_choice(user_text)
-        if chosen:
-            set_active_lens(state, chosen)
-            state["last_lens_preview_turn"] = None
-            plan["force_philosophy_mode"] = False  # идём в guidance с одной линзой
-            if DEBUG:
-                print(f"[Phi DEBUG] guided_path=on lens_lock={chosen}")
-
-    # Короткий ответ "оба"/"да"/"нет" + есть last_options: повторить варианты
-    if plan.get("force_repeat_options") and state.get("last_options"):
-        selected_names = []
-        opts = state["last_options"]
-        if isinstance(opts, list) and len(opts) >= 2:
-            reply_text = "Ок, начнём с (1), потом перейдём к (2). С какого?"
-        elif opts:
-            line = opts[0] if isinstance(opts, list) else opts
-            reply_text = f"Ок. {line} — с какого начнём?"
-        else:
-            reply_text = "Уточни, пожалуйста — с чего начать?"
-        want_option_close = False
-    # v17 Philosophy mode: guided_path (lens preview) вместо картечи A/B/C
-    # v19: длинные сообщения (>250) и финансовые — НЕ показывать preview, идти в LLM
-    elif (
-        plan.get("force_philosophy_mode")
-        and not get_active_lens(state)
-        and len((user_text or "").strip()) <= 250
-        and not detect_financial_pattern(user_text)
-    ):
-        selected_names = []
-        theme = "default"
-        if detect_lens_preview_need(user_text):
-            theme = "guidance"
-        reply_text = render_lens_preview(theme) + "\n\n" + render_lens_soft_question()
-        reply_text = enforce_constraints(
-            reply_text, "guidance", load_patterns().get("global_constraints", {})
-        )
-        state["last_lens_preview_turn"] = turn_index
-        want_option_close = False
-        if DEBUG:
-            print("[Phi DEBUG] guided_path=on")
-    elif (
-        plan.get("force_philosophy_mode")
-        and not get_active_lens(state)
-        and (len((user_text or "").strip()) > 250 or detect_financial_pattern(user_text))
-    ):
-        plan["force_philosophy_mode"] = False
-        if DEBUG:
-            print("[Phi DEBUG] guided_path=skip (long/finance) -> guidance LLM")
-    elif stage == "warmup" and not plan.get("disable_warmup") and not plan.get("philosophy_pipeline"):
-        # v17.2: skip warmup templates when philosophy intent — route to guidance
-        # disable_warmup=True (answer-first) → warmup-ветка не запускается
-        selected_names = []
-        reply_from_pattern = False
-        if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
-            data = load_patterns()
-            pattern = choose_pattern("warmup", context)
-            if pattern:
-                pattern_id = pattern.get("id", "")
-                reply_text = render_pattern(pattern, context)
-                constraints = data.get("global_constraints", {})
-                reply_text = enforce_constraints(reply_text, "warmup", constraints)
-                state["last_bridge_turn"] = turn_index
-                reply_from_pattern = True
-            else:
-                system_prompt = load_warmup_prompt()
-                ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
-                reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-                reply_text = postprocess_response(reply_text, stage)
-        else:
-            system_prompt = load_warmup_prompt()
-            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
-            reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-            reply_text = postprocess_response(reply_text, stage)
-        # v19.1: bridge/pattern не может быть финальным ответом — LLM fallback
-        if reply_from_pattern and reply_text:
-            rt = (reply_text or "").strip()
-            if len(rt) < 120 and "?" not in rt and "\n\n" not in rt:
-                system_prompt = load_warmup_prompt()
-                ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
-                reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-                reply_text = postprocess_response(reply_text, stage)
-                if DEBUG:
-                    print("[Phi DEBUG] bridge_fallback=ON (pattern too short)")
-    else:
-        # Guidance: system + линзы (включая philosophy_pipeline при skip warmup)
-        if plan.get("philosophy_pipeline"):
-            USER_STAGE[user_id] = "guidance"
-            stage = "guidance"
-        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
-
-        # Agency v13: term question — сразу пример, без LLM/fork
-        term = is_term_question(user_text)
-        if term:
-            user_context = {"user_text": user_text}
-            reply_text = term_example_first(term, user_context)
-            reply_text = enforce_constraints(
-                reply_text, "guidance", load_patterns().get("global_constraints", {})
-            )
-            want_option_close = False
-        else:
-            raw_llm_text = ""  # v21: length guard fallback
-            main_prompt = load_system_prompt()
-            all_lenses = load_all_lenses()
-            active_lens = get_active_lens(state)
-            if active_lens and active_lens in LENS_TO_SYSTEM_ID:
-                selected_names = [LENS_TO_SYSTEM_ID[active_lens]]
-            elif detect_financial_pattern(user_text):
-                selected_names = ["lens_finance_rhythm"]
-                mode_tag = "financial_rhythm"
-            else:
-                max_lenses = plan.get("max_lenses", 3)
-                selected_names = select_lenses(user_text, all_lenses, max_lenses=max_lenses)
-                if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
-                    selected_names = [
-                        "lens_control_scope" if n == "lens_general" else n
-                        for n in selected_names
-                    ]
-                    selected_names = list(dict.fromkeys(selected_names))
-                if plan.get("answer_first_required"):
-                    selected_names = selected_names[:3]
-                elif plan.get("explain_mode"):
-                    selected_names = selected_names[: plan.get("max_lenses", 2)]
-            lens_contents = [all_lenses.get(name, "") for name in selected_names]
-            lens_contents = [c for c in lens_contents if c]
-            _logger.info(f"[telemetry] mode={mode_tag or 'none'} lenses={selected_names}")
-            system_prompt = build_system_prompt(main_prompt, lens_contents)
-            system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
-            # FIX-7: force_expand_next — предыдущий ответ был слишком коротким
-            if state.get("force_expand_next"):
-                system_prompt += "\n\n---\nforce_expand_next: Дай развёрнутый ответ с объяснением и примером. Не менее 2 абзацев."
-                state["force_expand_next"] = False
-            phi_style = load_philosophy_style()
-            if phi_style:
-                system_prompt += "\n\n---\n" + phi_style
-            if plan.get("philosophy_pipeline"):
-                system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
-            # PATCH 5 + FIX-5: explain_mode — разъяснение без вопросов
-            if plan.get("explain_mode"):
-                system_prompt += """
-
----
-EXPLAIN_MODE: Отвечай разъясняюще.
-— Обязательно объясни механизм простыми словами
-— Обязательно дай 1 пример «как это выглядит»
-— Не менее 2 абзацев
-— НЕ заканчивай вопросом (пауза)
-Запрещено: «разобрать глубже или упростить», «если хочешь продолжим», «смотреть рамку или практику»."""
-            # v21.1: multi-style philosophy — несколько оптик (финансы/смысл/выбор)
-            if plan.get("allow_philosophy_examples") and (
-                detect_financial_pattern(user_text)
-                or any(k in (user_text or "").lower() for k in ("смысл", "выбор", "решен", "нереш", "ценност"))
-            ):
-                system_prompt += """
-
----
-v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философские оптики по теме. Формат: 2–4 предложения на оптику. Без буллетов «Школа: тезис». Без исторических справок. Без практик внутри оптик. Практика (если есть) — одним блоком после оптик. Максимум 3 школы, 1 вопрос, 1 практика."""
-
-            ctx = pack_context(user_id, state, HISTORY_STORE, user_language=_lang_code)
-            if plan.get("explain_mode"):
-                extra = f"\n\n[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]"
-                ctx = (ctx + extra).strip() if ctx else extra.strip()
-            guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
-            reply_text = call_openai(system_prompt, user_text, context_block=ctx)
-            raw_len = len(reply_text or "")
-            _logger.info(f"[telemetry] llm_len={raw_len}")
-            if _is_meta_lecture(reply_text) and not plan.get("philosophy_pipeline"):
-                reply_text = call_openai(system_prompt, user_text, force_short=True, context_block=ctx)
-            # v17: запрещено summary-trimming при stage == guidance
-            if _is_existential(user_text) and stage != "guidance":
-                reply_text = _trim_existential(reply_text)
-            raw_llm_text = reply_text
-            reply_text = postprocess_response(
-                reply_text, stage,
-                philosophy_pipeline=plan.get("philosophy_pipeline", False),
-                mode_tag=mode_tag,
-                answer_first_required=plan.get("answer_first_required", False),
-                explain_mode=plan.get("explain_mode", False),
-            )
-            final_len = len(reply_text or "")
-            _logger.info(f"[telemetry] final_len={final_len}")
-            if raw_len > 200 and final_len < 120:
-                _logger.warning("[telemetry] heavy_trim_detected")
-
-            # v17 Natural injection: после первого абзаца, при устойчивом паттерне
-            injection_this_turn = False
-            stable_match = detect_stable_pattern(user_text)
-            if should_inject(state, stage, stable_match, is_safety=False):
-                line_id = choose_philosophy_line(stable_match, user_text)
-                injection = render_injection(line_id)
-                reply_text = insert_injection_after_first_paragraph(reply_text, injection)
-                mark_injection_done(state)
-                state["active_philosophy_line"] = line_id
-                injection_this_turn = True
-                if DEBUG:
-                    print(f"[Phi DEBUG] natural_injection={line_id}")
-
-            # v17 Practice cooldown: strip если cooldown или injection turn
-            forbid_practice = (
-                state.get("practice_cooldown_turns", 0) > 0 or injection_this_turn
-            )
-            if forbid_practice:
-                reply_text = strip_practice_content(reply_text)
-
-            # Agency v13: handle "не понимаю" и answer>ask (guidance only)
-            if handle_i_dont_understand(user_text):
-                reply_text = replace_clarifying_with_example(reply_text)
-            if not should_ask_question(user_id, state):
-                reply_text = remove_questions(reply_text)
-
-            # v17.1 Recommendation Pause: при рекомендации — без вопросов, без практики, без fork
-            has_reco = stage != "safety" and detect_recommendation(reply_text)
-            if has_reco:
-                forbid_practice = True
-                reply_text = strip_practice_content(reply_text)
-                if DEBUG:
-                    print("[Phi DEBUG] recommendation_pause=on")
-
-            # Pattern engine: UX prefix + echo stripping (только guidance)
-            fork_allowed = fork_density_guard(user_id, state)
-            context["mode_tag"] = mode_tag  # v20.2: thematic bridge for finance/philosophy
-            if ENABLE_PATTERN_ENGINE and not plan.get("disable_pattern_engine"):
-                data = load_patterns()
-                constraints = data.get("global_constraints", {})
-                prefix, bridge_cat = build_ux_prefix("guidance", context, state) if plan.get("add_bridge") else (None, None)
-                if bridge_cat:
-                    state["last_bridge_category"] = bridge_cat
-                    state["last_bridge_turn"] = turn_index
-                stripped = strip_echo_first_line(reply_text)
-                if prefix and stripped != reply_text:
-                    reply_text = prefix + "\n\n" + stripped
-                elif stripped != reply_text:
-                    reply_text = stripped
-                if want_option_close and not plan.get("disable_option_close") and not plan.get("disable_fork") and fork_allowed and not has_reco:
-                    opt_line = get_option_close_line()
-                    reply_text = reply_text.rstrip() + "\n\n" + opt_line
-                    state["last_options"] = [opt_line]
-                    state["last_fork_turn"] = state["guidance_turns_count"]
-                    state["pending"] = {
-                        "kind": "fork",
-                        "options": ["1", "2"],
-                        "default": "1",
-                        "prompt": opt_line,
-                        "created_turn": turn_index,
-                    }
-                reply_text = enforce_constraints(reply_text, "guidance", constraints, plan)
-            else:
-                if want_option_close and not plan.get("disable_option_close") and not plan.get("disable_fork") and fork_allowed and not has_reco:
-                    opt_line = get_option_close_line()
-                    reply_text = reply_text.rstrip() + "\n\n" + opt_line
-                    state["last_options"] = [opt_line]
-                    state["last_fork_turn"] = state["guidance_turns_count"]
-                    state["pending"] = {
-                        "kind": "fork",
-                        "options": ["1", "2"],
-                        "default": "1",
-                        "prompt": opt_line,
-                        "created_turn": turn_index,
-                    }
-
-            # v21: length guard — если ответ < 180 символов, вернуть raw LLM (без pattern/bridge)
-            if plan.get("answer_first_required") and len(reply_text or "") < 180 and raw_llm_text:
-                reply_text = raw_llm_text
-
-    # Сохраняем линзы для /lens
-    if stage == "guidance" and selected_names:
-        LAST_LENS_BY_USER[user_id] = selected_names
-
-    # Philosophy Match: запись сигналов
-    if stage == "guidance":
-        mode_id = mode_tag or ("existential" if _is_existential(user_text) else None)
-        pm_record_signal(user_id, lens_ids=selected_names, mode_id=mode_id)
-
-    # Philosophy Match: мягкая подсказка (пропуск при force_philosophy_mode)
-    if not plan.get("force_philosophy_mode"):
-        pm_suggestion = _maybe_suggest_philosophy_match(user_id, stage, is_safety=False)
-        if pm_suggestion:
-            reply_text = reply_text.rstrip() + "\n\n" + pm_suggestion
-
-    # Session close choice (уже добавлен в pattern engine для guidance при ENABLE_PATTERN_ENGINE)
-    if (
-        want_option_close
-        and not plan.get("disable_fork")
-        and not (ENABLE_PATTERN_ENGINE and stage == "guidance")
-        and not has_reco
-    ):
-        reply_text = reply_text.rstrip() + "\n\nХочешь продолжить: (1) про причины или (2) про следующий шаг?"
-
-    # Agency v13: strip meta format questions (warmup/guidance only, not safety)
-    meta_stripped = 0
-    if stage in ("warmup", "guidance"):
-        reply_text, meta_stripped = strip_meta_format_questions(reply_text)
-    if DEBUG and stage in ("warmup", "guidance"):
-        print(f"[Phi DEBUG] agency: meta_questions_stripped={meta_stripped}")
-
-    # DEBUG: только в логах, НЕ в тексте ответа
-    if DEBUG:
-        detected_modes = ",".join(selected_names) if stage == "guidance" and selected_names else stage
-        if mode_tag:
-            detected_modes = f"{detected_modes}+{mode_tag}" if detected_modes != stage else mode_tag
-        print(f"[Phi DEBUG] mode={detected_modes} stage={stage}" + (f" pattern={pattern_id}" if pattern_id else ""))
-
-    # v17.1 Recommendation Pause: apply к тексту и practice_cooldown
-    if has_reco and stage != "safety":
-        reply_text = apply_recommendation_pause(reply_text)
-        state["practice_cooldown_turns"] = max(state.get("practice_cooldown_turns", 0), 2)
-
-    # v17: practice cooldown при выводе практики; tick lens_lock и cooldown
-    if stage == "guidance":
-        if contains_practice(reply_text) and not forbid_practice:
-            state["practice_cooldown_turns"] = COOLDOWN_AFTER_PRACTICE
-        tick_practice_cooldown(state)
-        tick_lens_lock(state)
-
-    # История и last texts для context
-    append_history(HISTORY_STORE, user_id, "user", user_text)
-    append_history(HISTORY_STORE, user_id, "assistant", reply_text)
-    state["last_user_text"] = user_text
-    state["last_bot_text"] = reply_text
-
-    # Логирование диалога
-    log_dialog(user_id, user_text, selected_names if stage == "guidance" else [], reply_text)
-    if DEBUG and pattern_id:
-        print(f"[Phi DEBUG] pattern_id={pattern_id}")
-
-    # v21.1: final send clamp — ban-opener + meta-tail hard drop (последний шаг)
-    # v21.2: completion guard — дописать закрытие или регенерировать при обрубке
-    clamp_kw = {
-        "mode_tag": mode_tag,
-        "stage": stage,
-        "answer_first_required": plan.get("answer_first_required", False),
-        "philosophy_pipeline": plan.get("philosophy_pipeline", False),
-        "explain_mode": plan.get("explain_mode", False),
-    }
-    reply_text = final_send_clamp(reply_text, **clamp_kw)
-
-    if stage == "guidance" and looks_incomplete(reply_text):
-        reply_text2 = add_closing_sentence(reply_text)
-        reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
-        if looks_incomplete(reply_text2) and guidance_ctx_for_completion:
-            gc = guidance_ctx_for_completion
-            reply_text2 = call_openai(gc["system_prompt"], gc["user_text"], context_block=gc["ctx"])
-            reply_text2 = postprocess_response(
-                reply_text2, stage,
-                philosophy_pipeline=plan.get("philosophy_pipeline", False),
-                mode_tag=mode_tag,
-                answer_first_required=plan.get("answer_first_required", False),
-                explain_mode=plan.get("explain_mode", False),
-            )
-            reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
-        reply_text = reply_text2
-
-    # Unified finalize: strip_meta_tail → clamp_questions → meta_tail_to_fork_or_close → completion_guard
-    reply_text = finalize_reply(reply_text, plan)
-
-    # FIX-7: Anti-telegraph — короткий ответ в guidance → следующий развёрнутый
-    if stage == "guidance" and len((reply_text or "").strip()) < 280:
-        state["force_expand_next"] = True
-
-    # FIX-3: снять orientation_lock после полного ответа
-    if state.get("orientation_lock"):
-        state["orientation_lock"] = False
-
-    # Unified send pipeline (sanitize внутри send_text)
+    tel = result.get("telemetry", {})
+    log_dialog(user_id, user_text, tel.get("lenses", []), reply_text)
     save_state(_state_to_persist())
     await send_text(bot, message.chat.id, reply_text, reply_markup=FEEDBACK_KEYBOARD)
 

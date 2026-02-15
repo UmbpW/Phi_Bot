@@ -1,0 +1,215 @@
+# 10 синтетических персон для multi-turn eval
+
+- id: impatient_pragmatic_25
+  title: Нетерпеливый прагматик 25
+  background: Мужчина 25, стартап, хочет решения быстро, без воды
+  speaking_style:
+    verbosity: short
+    tone: blunt
+    profanity_ok: false
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: true
+    hates_many_questions: true
+  goals:
+    - Получить конкретный совет
+    - Не терять время
+  adversarial_moves:
+    - "давай к делу"
+    - "ты не ответил"
+    - "слишком долго"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []
+
+- id: philosophy_nerd_32
+  title: Философ-энтузиаст 32
+  background: Женщина 32, читает стоиков и Камю, любит углубляться
+  speaking_style:
+    verbosity: long
+    tone: calm
+    profanity_ok: false
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: false
+    hates_many_questions: false
+  goals:
+    - Обсудить философские концепции
+    - Сравнить традиции
+  adversarial_moves:
+    - "а что насчёт буддизма"
+    - "переключись на стоиков"
+    - "почему не даосизм"
+  philosophy_preferences:
+    wants_philosophy: true
+    traditions: [stoic, existential, buddhist, daoist]
+
+- id: anxious_high_earner_38
+  title: Тревожный высокодоходник 38
+  background: Мужчина 38, финансы в порядке, но постоянная тревога из-за денег
+  speaking_style:
+    verbosity: medium
+    tone: anxious
+    profanity_ok: false
+  triggers:
+    hates_warmup: false
+    hates_short_answers: true
+    hates_meta: true
+    hates_many_questions: true
+  goals:
+    - Разобраться с тревогой о деньгах
+  adversarial_moves:
+    - "но у меня всё хорошо с доходом"
+    - "откуда эта тревога"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []
+
+- id: insomniac_thinker_29
+  title: Бессонница и мысли 29
+  background: Женщина 29, ночами не может уснуть, мысли крутятся
+  speaking_style:
+    verbosity: medium
+    tone: anxious
+    profanity_ok: false
+  triggers:
+    hates_warmup: false
+    hates_short_answers: true
+    hates_meta: true
+    hates_many_questions: false
+  goals:
+    - Понять как справиться с бессонницей
+  adversarial_moves:
+    - "иногда мысли не дают уснуть"
+    - "что с этим делать"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []
+
+- id: irritated_morning_anger_27
+  title: Злость по утрам 27
+  background: Мужчина 27, просыпается с раздражением, не понимает почему
+  speaking_style:
+    verbosity: short
+    tone: blunt
+    profanity_ok: true
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: true
+    hates_many_questions: true
+  goals:
+    - Понять откуда злость
+  adversarial_moves:
+    - "расскажи про злость"
+    - "откуда она берётся"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []
+
+- id: guilt_relationship_26
+  title: Вина в отношениях 26
+  background: Женщина 26, конфликт с партнёром, чувство вины
+  speaking_style:
+    verbosity: medium
+    tone: emotional
+    profanity_ok: false
+  triggers:
+    hates_warmup: false
+    hates_short_answers: false
+    hates_meta: true
+    hates_many_questions: false
+  goals:
+    - Разобраться с виной
+  adversarial_moves:
+    - "как философы смотрят на любовь"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []
+
+- id: nihilist_meaning_24
+  title: Нигилист ищущий смысл 24
+  background: Мужчина 24, всё кажется бессмысленным, ищет опору
+  speaking_style:
+    verbosity: medium
+    tone: skeptical
+    profanity_ok: false
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: true
+    hates_many_questions: true
+  goals:
+    - Найти смысл или примириться с его отсутствием
+  adversarial_moves:
+    - "всё бессмысленно"
+    - "зачем жить"
+  philosophy_preferences:
+    wants_philosophy: true
+    traditions: [existential, stoic]
+
+- id: overwhelmed_tasks_30
+  title: Перегружен задачами 30
+  background: Женщина 30, куча дел, не знает с чего начать
+  speaking_style:
+    verbosity: medium
+    tone: anxious
+    profanity_ok: false
+  triggers:
+    hates_warmup: false
+    hates_short_answers: false
+    hates_meta: true
+    hates_many_questions: true
+  goals:
+    - Получить структуру
+  adversarial_moves:
+    - "мне плохо"
+    - "ничего не успеваю"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []
+
+- id: confessional_spiritual_35
+  title: Исповедующий духовный 35
+  background: Мужчина 35, интересуется религиями и традициями
+  speaking_style:
+    verbosity: long
+    tone: calm
+    profanity_ok: false
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: false
+    hates_many_questions: false
+  goals:
+    - Узнать как разные традиции смотрят на жизнь
+  adversarial_moves:
+    - "поговорим про философию смерти"
+    - "как христианство и буддизм"
+  philosophy_preferences:
+    wants_philosophy: true
+    traditions: [buddhist, religious_ok, daoist]
+
+- id: skeptical_tester_22
+  title: Скептик-тестер 22
+  background: Парень 22, проверяет бота на прочность
+  speaking_style:
+    verbosity: short
+    tone: skeptical
+    profanity_ok: true
+  triggers:
+    hates_warmup: true
+    hates_short_answers: true
+    hates_meta: true
+    hates_many_questions: true
+  goals:
+    - Поймать бота на ошибках
+  adversarial_moves:
+    - "ты потерял контекст"
+    - "ты меня не слышишь"
+    - "объясни шире"
+  philosophy_preferences:
+    wants_philosophy: false
+    traditions: []

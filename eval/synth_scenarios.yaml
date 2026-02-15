@@ -1,0 +1,127 @@
+# 18+ сценариев для multi-turn eval
+
+- id: sc_finance_anxiety
+  title: Финансы высокий доход тревога
+  seed_message: У меня нормальный доход, но постоянная тревога из-за денег. Каждое утро просыпаюсь с мыслью о счетах.
+  target_topic: finance
+  length_turns: 8
+  required_events: []
+
+- id: sc_philosophy_death
+  title: Просто поговорим про философию смерти
+  seed_message: Просто поговорим про философию смерти.
+  target_topic: philosophy
+  length_turns: 8
+  required_events: []
+
+- id: sc_love_money_philosophy
+  title: Любовь/дружба/деньги как философская тема
+  seed_message: Как разные философы смотрят на любовь и деньги?
+  target_topic: philosophy
+  length_turns: 8
+  required_events: []
+
+- id: sc_insomnia
+  title: Бессонница и мысли
+  seed_message: Иногда мысли не дают уснуть. Что с этим делать?
+  target_topic: insomnia
+  length_turns: 7
+  required_events: []
+
+- id: sc_morning_anger
+  title: Злость утром
+  seed_message: Расскажи про злость, откуда она берётся по утрам.
+  target_topic: anger
+  length_turns: 7
+  required_events: []
+
+- id: sc_me_bad
+  title: "мне плохо"
+  seed_message: мне плохо
+  target_topic: orientation
+  length_turns: 8
+  required_events: []
+
+- id: sc_meaning_life
+  title: Смысл жизни
+  seed_message: Всё кажется бессмысленным. Зачем жить?
+  target_topic: meaning
+  length_turns: 8
+  required_events: []
+
+- id: sc_choice_undecided
+  title: Выбор и нерешительность
+  seed_message: Не могу решить — уйти с работы или остаться. Как перестать переживать?
+  target_topic: choice
+  length_turns: 8
+  required_events: []
+
+- id: sc_religions
+  title: Религии и конфессии
+  seed_message: Как христианство и буддизм смотрят на страдание?
+  target_topic: religion
+  length_turns: 8
+  required_events: []
+
+- id: sc_explain_wider
+  title: "объясни шире"
+  seed_message: Расскажи детальнее про зону контроля, разбери на слои и дай советы.
+  target_topic: explain
+  length_turns: 7
+  required_events: [расширь ответ]
+
+- id: sc_why_not_buddhism
+  title: "почему не буддизм"
+  seed_message: Расскажи про стоиков. А почему не буддизм?
+  target_topic: philosophy
+  length_turns: 8
+  required_events: [сменить философию]
+
+- id: sc_switch_stoics
+  title: "переключись на стоиков"
+  seed_message: Поговорим про философию. Переключись на стоиков.
+  target_topic: philosophy
+  length_turns: 8
+  required_events: [сменить философию]
+
+- id: sc_you_dont_hear
+  title: "ты меня не слышишь"
+  seed_message: Мне тревожно из-за денег. (после 2 ходов) Ты меня не слышишь.
+  target_topic: meta
+  length_turns: 8
+  required_events: [ты потерял контекст]
+
+- id: sc_lost_context
+  title: "ты потерял контекст"
+  seed_message: Я говорил про отношения. (после 3 ходов) Ты потерял контекст.
+  target_topic: meta
+  length_turns: 8
+  required_events: [ты потерял контекст]
+
+- id: sc_long_context
+  title: Длинный контекст answer-first
+  seed_message: Слушай, давай заново обсудим вопрос финансов — у меня постоянная тревога из-за долгов, не могу расслабиться и каждое утро просыпаюсь с мыслью о счетах. Хочется понять, как перестать так переживать.
+  target_topic: finance
+  length_turns: 8
+  required_events: []
+
+- id: sc_explain_detail
+  title: Объясни детальнее
+  seed_message: Расскажи детальнее про выгрузку на бумагу, как это работает, покажи пример.
+  target_topic: explain
+  length_turns: 7
+  required_events: [объясни подробнее]
+
+- id: sc_direct_philosophy
+  title: Прямой философский запрос
+  seed_message: Поговорим про философию.
+  target_topic: philosophy
+  length_turns: 8
+  required_events: []
+
+- id: sc_overwhelmed
+  title: Перегруз задачами
+  seed_message: У меня куча дел, не знаю с чего начать. Мне плохо.
+  target_topic: overload
+  length_turns: 7
+  required_events: []
