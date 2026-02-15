@@ -45,6 +45,24 @@ META_TAIL_SENTENCE_PHRASES = (
     "можем разобрать", "хочешь — разберём", "хочешь разберём",
 )
 
+# FIX-6: Philosophy voice softener — методичные фразы → живые
+STYLE_REWRITE = {
+    "Есть оптика": "Можно посмотреть так",
+    "Есть рамка": "Один из полезных разворотов здесь",
+    "В философской линии": "Если смотреть через одну философскую линию",
+}
+
+
+def apply_style_rewrite(text: str) -> str:
+    """FIX-6: замена методичных фраз на более живые."""
+    if not text or not text.strip():
+        return text
+    out = text
+    for old, new in STYLE_REWRITE.items():
+        out = out.replace(old, new)
+    return out
+
+
 # v19: debug tags — вычищать перед отправкой
 DEBUG_TAG_PATTERN = re.compile(
     r"\[(?:pattern|mode|stage|lens):\s*[^\]]*\]",

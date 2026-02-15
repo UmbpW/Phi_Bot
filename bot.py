@@ -396,6 +396,8 @@ def _state_to_persist() -> dict:
             "user_language": state.get("user_language"),
             "onboarding_shown": state.get("onboarding_shown"),
             "pending_orientation": state.get("pending_orientation"),
+            "orientation_lock": state.get("orientation_lock"),
+            "force_expand_next": state.get("force_expand_next"),
             "last_updated": time.time(),
         }
     return out
@@ -480,6 +482,8 @@ def _load_persisted_state() -> None:
             "user_language": blob.get("user_language"),
             "onboarding_shown": blob.get("onboarding_shown"),
             "pending_orientation": blob.get("pending_orientation", False),
+            "orientation_lock": blob.get("orientation_lock", False),
+            "force_expand_next": blob.get("force_expand_next", False),
         }
 
 
@@ -742,6 +746,7 @@ async def process_user_query(message: Message, user_text: str) -> None:
             "last_lens_preview_turn": None,
             "onboarding_shown": False,
             "pending_orientation": False,
+            "orientation_lock": False,
         }
     state = USER_STATE[user_id]
     state["turn_index"] = state.get("turn_index", 0) + 1
@@ -788,6 +793,10 @@ async def process_user_query(message: Message, user_text: str) -> None:
     )
     if plan.get("answer_first_required"):
         _logger.info("[telemetry] answer_first=True")
+    # FIX-3: orientation_lock — нет повторной воронки после выбора
+    if state.get("orientation_lock"):
+        plan["disable_fork"] = True
+        plan["disable_pattern_engine"] = True
     context["stage"] = stage
     context["philosophy_pipeline"] = plan.get("philosophy_pipeline", False)
     context["disable_list_templates"] = plan.get("disable_list_templates", False)
@@ -811,6 +820,8 @@ async def process_user_query(message: Message, user_text: str) -> None:
     if state.get("pending_orientation"):
         choice = (user_text or "").strip().lower()
         state["pending_orientation"] = False
+        state["orientation_lock"] = True  # FIX-3: depth lock — нет повторной воронки
+        state["orientation_lock_turns"] = 1
         handled_orientation_choice = True
         if "сост" in choice:
             plan["stage_override"] = "guidance"
@@ -828,6 +839,9 @@ async def process_user_query(message: Message, user_text: str) -> None:
         else:
             plan["stage_override"] = "guidance"
             plan["disable_warmup"] = True
+        # FIX-3: не задавать fork сразу после выбора ориентации
+        plan["disable_fork"] = True
+        plan["disable_pattern_engine"] = True
         stage = plan.get("stage_override") or stage
         USER_STAGE[user_id] = stage
         if DEBUG:
@@ -991,21 +1005,25 @@ async def process_user_query(message: Message, user_text: str) -> None:
             _logger.info(f"[telemetry] mode={mode_tag or 'none'} lenses={selected_names}")
             system_prompt = build_system_prompt(main_prompt, lens_contents)
             system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
+            # FIX-7: force_expand_next — предыдущий ответ был слишком коротким
+            if state.get("force_expand_next"):
+                system_prompt += "\n\n---\nforce_expand_next: Дай развёрнутый ответ с объяснением и примером. Не менее 2 абзацев."
+                state["force_expand_next"] = False
             phi_style = load_philosophy_style()
             if phi_style:
                 system_prompt += "\n\n---\n" + phi_style
             if plan.get("philosophy_pipeline"):
                 system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
-            # PATCH 5: explain_mode — разъяснение без вопросов
+            # PATCH 5 + FIX-5: explain_mode — разъяснение без вопросов
             if plan.get("explain_mode"):
                 system_prompt += """
 
 ---
 EXPLAIN_MODE: Отвечай разъясняюще.
-1. Коротко назови, что объясняешь (1 строка)
-2. Объясни механизм простыми словами (5–10 строк)
-3. Дай 1 конкретный пример «как это выглядит»
-4. НЕ задавай вопрос в конце (пауза)
+— Обязательно объясни механизм простыми словами
+— Обязательно дай 1 пример «как это выглядит»
+— Не менее 2 абзацев
+— НЕ заканчивай вопросом (пауза)
 Запрещено: «разобрать глубже или упростить», «если хочешь продолжим», «смотреть рамку или практику»."""
             # v21.1: multi-style philosophy — несколько оптик (финансы/смысл/выбор)
             if plan.get("allow_philosophy_examples") and (
@@ -1092,7 +1110,7 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
                     reply_text = prefix + "\n\n" + stripped
                 elif stripped != reply_text:
                     reply_text = stripped
-                if want_option_close and not plan.get("disable_option_close") and fork_allowed and not has_reco:
+                if want_option_close and not plan.get("disable_option_close") and not plan.get("disable_fork") and fork_allowed and not has_reco:
                     opt_line = get_option_close_line()
                     reply_text = reply_text.rstrip() + "\n\n" + opt_line
                     state["last_options"] = [opt_line]
@@ -1104,9 +1122,9 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
                         "prompt": opt_line,
                         "created_turn": turn_index,
                     }
-                reply_text = enforce_constraints(reply_text, "guidance", constraints)
+                reply_text = enforce_constraints(reply_text, "guidance", constraints, plan)
             else:
-                if want_option_close and not plan.get("disable_option_close") and fork_allowed and not has_reco:
+                if want_option_close and not plan.get("disable_option_close") and not plan.get("disable_fork") and fork_allowed and not has_reco:
                     opt_line = get_option_close_line()
                     reply_text = reply_text.rstrip() + "\n\n" + opt_line
                     state["last_options"] = [opt_line]
@@ -1141,6 +1159,7 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
     # Session close choice (уже добавлен в pattern engine для guidance при ENABLE_PATTERN_ENGINE)
     if (
         want_option_close
+        and not plan.get("disable_fork")
         and not (ENABLE_PATTERN_ENGINE and stage == "guidance")
         and not has_reco
     ):
@@ -1212,6 +1231,14 @@ v21.1 Multi-style (2–3 оптики): Можно дать 2–3 философ
 
     # Unified finalize: strip_meta_tail → clamp_questions → meta_tail_to_fork_or_close → completion_guard
     reply_text = finalize_reply(reply_text, plan)
+
+    # FIX-7: Anti-telegraph — короткий ответ в guidance → следующий развёрнутый
+    if stage == "guidance" and len((reply_text or "").strip()) < 280:
+        state["force_expand_next"] = True
+
+    # FIX-3: снять orientation_lock после полного ответа
+    if state.get("orientation_lock"):
+        state["orientation_lock"] = False
 
     # Unified send pipeline (sanitize внутри send_text)
     save_state(_state_to_persist())

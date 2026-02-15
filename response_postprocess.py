@@ -69,5 +69,10 @@ def postprocess_response(
         from philosophy.multi_school_blocker import apply_multi_school_blocker
         result = apply_multi_school_blocker(result)
 
+    # FIX-6: Philosophy voice softener — методичные фразы → живые
+    if stage == "guidance":
+        from philosophy.style_guards import apply_style_rewrite
+        result = apply_style_rewrite(result)
+
     _logger.info(f"[telemetry] questions={result.count('?')}")
     return result

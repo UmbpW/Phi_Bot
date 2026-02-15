@@ -128,9 +128,14 @@ def enforce_constraints(
     text: str,
     stage: str,
     constraints: dict,
+    plan: Optional[dict] = None,
 ) -> str:
-    """Применяет global_constraints: лимит вопросов, forbid_phrases, max_lines, first_line_max_words."""
+    """Применяет global_constraints: лимит вопросов, forbid_phrases, max_lines, first_line_max_words.
+    FIX-2: Не режем explain-ответы — при explain_mode или disable_pattern_engine возвращаем как есть."""
     if not text or not text.strip():
+        return text
+    plan = plan or {}
+    if plan.get("explain_mode") or plan.get("disable_pattern_engine"):
         return text
 
     q_limits = constraints.get("question_limits", {})
@@ -223,10 +228,12 @@ def build_ux_prefix(stage: str, context: dict, state: Optional[dict] = None):
     v21: answer_first_required → thematic only, empathy disabled."""
     state = state or {}
     mode_tag = context.get("mode_tag")
+    # FIX-4: explain/expand — thematic, не empathy ("С таким фоном...")
     is_theme_mode = (
         mode_tag == "financial_rhythm"
         or context.get("philosophy_pipeline")
         or context.get("answer_first_required")
+        or context.get("explain_mode")
     )
     if is_theme_mode and THEMATIC_BRIDGE:
         return random.choice(THEMATIC_BRIDGE), "thematic"
