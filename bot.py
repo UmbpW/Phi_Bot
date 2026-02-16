@@ -120,6 +120,7 @@ from philosophy.recommendation_pause import (
     apply_recommendation_pause,
 )
 from philosophy.style_guards import clamp_questions, strip_meta_tail, apply_style_guards
+from response_postprocess import format_readability_ru
 from philosophy.practice_cooldown import (
     strip_practice_content,
     contains_practice,
@@ -132,8 +133,8 @@ BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 
 
 def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
-    """Fix Pack B: unified postprocess. clamp_questions — ПОСЛЕДНИЙ шаг.
-    Порядок: strip_meta_tail → clamp_practice → style_guards → completion_guard → meta_tail_to_fork → clamp_questions."""
+    """Fix Pack B + PATCH F: unified postprocess. clamp_questions — ПОСЛЕДНИЙ шаг.
+    Порядок: strip_meta_tail → clamp_practice → style_guards → readability → completion_guard → meta_tail_to_fork → clamp_questions."""
     plan = plan or {}
     out = (text or "").strip()
     if not out:
@@ -142,6 +143,9 @@ def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
     out = clamp_to_first_practice_only(out)
     ban_empathy = plan.get("philosophy_pipeline") or plan.get("answer_first_required") or plan.get("explain_mode")
     out = apply_style_guards(out, ban_empathy_openers=ban_empathy, answer_first=plan.get("answer_first_required", False))
+    # PATCH F: readability formatter (paragraph breaks, enumerations, bullets)
+    if not plan.get("disable_readability_formatter"):
+        out = format_readability_ru(out)
     out = completion_guard(out, max_questions=plan.get("max_questions", 1))
     out = meta_tail_to_fork_or_close(out, max_questions=plan.get("max_questions", 1))
     out = clamp_questions(out, max_questions=plan.get("max_questions", 1))
@@ -260,6 +264,19 @@ def transcribe_voice(audio_path: Path) -> str:
         return (transcription.text or "").strip()
     except Exception as e:
         return f"[Ошибка распознавания: {e}]"
+
+
+def _explain_mode_instructions_ru() -> str:
+    """PATCH F: инструкция для режима разъяснения — развернуто, понятно, без вопросов."""
+    return (
+        "Пользователь просит разъяснение. Сделай ответ более развернутым и понятным: "
+        "1) кратко переформулируй, что именно объясняешь; "
+        "2) разложи на 2–4 смысловых блока; "
+        "3) дай 1 короткий пример; "
+        "4) завершай без вопросов. "
+        "Пиши читабельно: абзацы и маркеры, без полотна. "
+        "Тон: живой, спокойный, без формальностей и без давления."
+    )
 
 
 def _get_stage(user_id: int, user_text: str) -> str:
@@ -1033,6 +1050,8 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
                 elif any(k in (user_text or "").lower() for k in ("пример", "покажи", "как выглядит", "на моём случае", "на моем случае")):
                     expl += " Обязательно включи конкретный пример."
                 system_prompt += expl
+                # PATCH F: Explain Expander — развернуто и читабельно
+                system_prompt += "\n\n---\n" + _explain_mode_instructions_ru()
             if plan.get("allow_philosophy_examples") and (detect_financial_pattern(user_text) or any(k in (user_text or "").lower() for k in ("смысл", "выбор", "решен", "нереш", "ценност"))):
                 system_prompt += "\n\n---\nv21.1 Multi-style: 2–3 оптики. Максимум 3 школы, 1 вопрос, 1 практика."
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))

@@ -7,6 +7,7 @@ from router import detect_financial_pattern
 from intent_capabilities import detect_capabilities_intent, CAPABILITIES_REPLY_RU
 from intent_philosophy_topic import detect_philosophy_topic_intent
 from intent_topic_v2 import is_topic_high, is_topic_mid
+from intent_explain_ru import detect_explain_intent
 from utils.is_philosophy_question import (
     is_direct_philosophy_intent,
     is_philosophy_question as _is_philosophy_question,
@@ -245,6 +246,22 @@ def governor_plan(
                 "min_chars": 900,
                 "intent": "philosophy_topic_llm",
             }
+
+    # PATCH F: Explain Expander — "объясни", "поясни", "детальнее", "подробнее" etc.
+    if detect_explain_intent(user_text):
+        return {
+            "explain_mode": True,
+            "stage_override": "guidance",
+            "disable_warmup": True,
+            "answer_first_required": True,
+            "max_questions": 0,
+            "allow_philosophy_examples": True,
+            "min_chars": 900,
+            "disable_pattern_engine": True,
+            "disable_fork": True,
+            "disable_option_close": False,
+            "intent": "explain_expand",
+        }
 
     # Fix Pack D: Buddhism/tradition switch → explain_mode + philosophy_pipeline (highest priority)
     if _has_buddhism_switch(user_text):

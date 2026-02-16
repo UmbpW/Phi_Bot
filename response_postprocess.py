@@ -1,10 +1,51 @@
-"""Постобработка ответа: ограничение числа вопросов, style guards."""
+"""Постобработка ответа: ограничение числа вопросов, style guards, readability formatter."""
 
 import logging
 from typing import Optional
 import re
 
 _logger = logging.getLogger("phi.telemetry")
+
+
+def format_readability_ru(text: str) -> str:
+    """PATCH F: heuristic formatter for Telegram readability.
+    - inserts paragraph breaks in long monolithic text
+    - formats 1) 2) 3) enumerations into separate lines
+    - keeps bullets '—' on separate lines
+    """
+    if not text:
+        return text
+
+    t = text.strip()
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = "\n".join([re.sub(r"[ \t]+", " ", line).strip() for line in t.split("\n")])
+
+    has_paragraphs = "\n\n" in t
+    is_monolith = (not has_paragraphs) and (len(t) >= 650)
+
+    # Ensure enumerations each start on a new line
+    t = re.sub(r"(?<!\n)(\b\d\))\s+", r"\n\1 ", t)
+    t = re.sub(r"(?<!\n)(\b\d\.)\s+", r"\n\1 ", t)
+
+    # Ensure bullet dashes start on new line
+    t = re.sub(r"(?<!\n)\s+—\s+", r"\n— ", t)
+
+    if is_monolith:
+        pivots = [
+            "Есть", "Но", "При этом", "Поэтому", "Во-первых",
+            "Во-вторых", "С другой стороны", "Другая", "Важно",
+            "Если", "Когда", "Чтобы", "И ещё", "И еще",
+        ]
+        for p in pivots:
+            t = re.sub(rf"(?<=\.)\s+(?={re.escape(p)}\b)", "\n\n", t)
+
+        def _break_long(m):
+            return "\n\n" if len(t) > 900 else " "
+
+        t = re.sub(r"(?<=\.)\s+(?=[А-ЯЁ])", _break_long, t, count=2)
+
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    return t
 
 
 def _split_to_sentences(text: str) -> list:
