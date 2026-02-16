@@ -329,6 +329,15 @@ def _approx_tokens_from_text(s: str) -> int:
     return max(1, (len(s) + 3) // 4)
 
 
+def _cache_salt() -> str:
+    """FIX V1.2: соль для кэша — меняется при смене системного промпта или кода."""
+    sp = os.getenv("SYSTEM_PROMPT_HASH", "").strip()
+    sha = os.getenv("GIT_SHA", "").strip()
+    appv = os.getenv("APP_VERSION", "").strip()
+    parts = [p for p in [sp, sha, appv] if p]
+    return "|".join(parts) if parts else "nosalt"
+
+
 def _extract_usage(response, inst: str, input_text: str, output_text: str) -> dict:
     """Извлекает usage из response; при отсутствии — приблизительная оценка."""
     usage = {}
@@ -373,7 +382,14 @@ def call_openai(
     max_tokens_env = os.getenv("EVAL_MAX_TOKENS")
     max_output_tokens = int(max_tokens_env) if max_tokens_env and max_tokens_env.isdigit() else None
 
-    key_obj = {"ns": "bot", "model": model_name, "instructions": inst, "input": input_text, "force_short": force_short}
+    key_obj = {
+        "salt": _cache_salt(),
+        "ns": "bot",
+        "model": model_name,
+        "instructions": inst,
+        "input": input_text,
+        "force_short": force_short,
+    }
     if use_cache:
         try:
             from eval.llm_cache import cache_get, cache_put

@@ -227,6 +227,16 @@ def main():
     os.environ["EVAL_CACHE_DIR"] = args.cache_dir if use_cache else ""
     os.environ["EVAL_USE_CACHE"] = "1" if use_cache else "0"
 
+    # FIX V1.2: cache_salt — GIT_SHA для разделения кэша по версиям кода
+    if use_cache and not os.getenv("GIT_SHA"):
+        try:
+            import subprocess
+            r = subprocess.run(["git", "rev-parse", "--short=8", "HEAD"], capture_output=True, text=True, timeout=2, cwd=PROJECT_ROOT)
+            if r.returncode == 0 and r.stdout.strip():
+                os.environ["GIT_SHA"] = r.stdout.strip()
+        except Exception:
+            pass
+
     # TEST COST OPTIMIZER V1.1: оценка стоимости (USD per 1K tokens)
     MODEL_PRICING_USD_PER_1K = {
         "gpt-5.2": {"in": 0.010, "out": 0.030},
@@ -295,6 +305,13 @@ def main():
                 if failed_ids and not only_failed_pairs:
                     print(f"[eval] only-failed: report has no 'dialogues' with persona_id/scenario_id; running full set")
                     only_failed_pairs = None
+                else:
+                    # FIX V1.2: cap failed set by --limit
+                    if only_failed_pairs is not None and args.limit > 0:
+                        _sorted = sorted(only_failed_pairs)
+                        if len(_sorted) > args.limit:
+                            only_failed_pairs = set(_sorted[: args.limit])
+                            print(f"[eval] only-failed: selected={len(only_failed_pairs)} (cap=limit {args.limit})")
                 print(f"[eval] only-failed=ON report={rp} failed_ids={len(failed_ids)} pairs={len(only_failed_pairs) if only_failed_pairs else 0}")
             except Exception as e:
                 print(f"[eval] only-failed=ON but failed to parse report: {e}")
@@ -336,6 +353,8 @@ def main():
     }
     persona_ids_run = []
     dialogues_report = []
+    selected_pairs = 0
+    total_pairs = 0
 
     dialog_id = 0
     for persona in personas:
@@ -357,10 +376,12 @@ def main():
             if not turns:
                 continue
 
+            total_pairs += 1
             if only_failed_pairs is not None and len(only_failed_pairs) > 0:
                 if (persona_id, scenario_id) not in only_failed_pairs:
                     continue
 
+            selected_pairs += 1
             user_id = f"synth:{persona_id}:{scenario_id}:{dialog_id}"
             history = []
             prev_user = None
@@ -435,6 +456,9 @@ def main():
                 persona_ids_run.append(persona_id)
             dialog_id += 1
 
+    if args.only_failed:
+        print(f"[eval] only-failed pairs selected={selected_pairs} of total={total_pairs}")
+
     avg_len = counts["total_len"] / counts["total_turns"] if counts["total_turns"] else 0
 
     telemetry_json = dict(telemetry)
@@ -469,6 +493,20 @@ def main():
     Path(report_path).parent.mkdir(parents=True, exist_ok=True)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
+
+    # FIX V1.2: stop-on-stable — если only-failed дал 0 нарушений
+    if args.only_failed:
+        total_violations = 0
+        for d in report.get("dialogues", []):
+            v = d.get("violations")
+            if isinstance(v, list):
+                total_violations += len(v)
+            elif isinstance(v, int):
+                total_violations += v
+        if total_violations == 0:
+            print("[eval] STABLE: only-failed rerun produced 0 violations. Stopping.")
+            sys.exit(0)
+
     print("\n--- Сводка ---")
     print(f"personas: {persona_ids_run}")
     print(f"avg_len: {avg_len:.0f}")
