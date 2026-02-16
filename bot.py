@@ -85,6 +85,8 @@ from patterns.pattern_governor import (
     is_philosophy_question,
     _has_buddhism_switch,
 )
+from intent_philosophy_topic import detect_philosophy_topic_intent
+from intent_topic_v2 import is_topic_high
 from patterns.agency_layer import (
     strip_meta_format_questions,
     term_example_first,
@@ -674,8 +676,11 @@ ABOUT_TEXT = (
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    """Приветствие по /start."""
+    """Приветствие по /start. Онбординг — только пример работы бота, не часть диалога."""
     uid = message.from_user.id if message.from_user else 0
+    # Онбординг не считается первым ответом: очищаем историю, диалог начинается с нуля
+    if uid in HISTORY_STORE:
+        HISTORY_STORE[uid] = []
     USER_STAGE[uid] = "warmup"
     USER_MSG_COUNT[uid] = 0
     USER_STATE[uid] = {
@@ -827,7 +832,10 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
 
     history_count = len(HISTORY_STORE.get(user_id, []))
     current_stage = USER_STAGE.get(user_id)
-    if should_skip_warmup_first_turn(state, user_text, history_count, current_stage):
+    # FIX: концептуальные вопросы (бог, философы 21 века) — не использовать first_turn gate,
+    # иначе fallback "decision" даёт ответ про выбор/зона контроля вместо ответа на вопрос
+    is_concept = detect_philosophy_topic_intent(user_text)[0] or is_topic_high(user_text)
+    if should_skip_warmup_first_turn(state, user_text, history_count, current_stage) and not is_concept:
         gate_text, _ = render_first_turn_philosophy(user_text)
         gate_text = enforce_constraints(gate_text, "guidance", load_patterns().get("global_constraints", {}))
         USER_STAGE[user_id] = "guidance"
