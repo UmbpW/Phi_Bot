@@ -1,0 +1,83 @@
+# intent_philosophy_topic.py
+import re
+from typing import Tuple, Dict, Any
+
+# Маркеры "это философская тема/понятие", а не личная история
+TOPIC_MARKERS = [
+    "что такое", "что значит", "как понимать", "в чем смысл", "в чём смысл",
+    "как философ", "как философы", "в философии", "философский",
+    "как считают", "как думают", "как смотреть", "взгляд на", "отношение к",
+    "как стоики", "как стоиц", "как будд", "как экзист", "как конфуций",
+    "как сократ", "как платон", "как аристот", "как кант", "как ницше",
+    "как христиан", "как ислам", "как иуд", "как религ",
+    "существует ли", "есть ли", "доказательства", "аргумент",
+]
+
+# Частые философские темы (включая метафизику/религию как философский объект)
+PHILOSOPHY_TOPICS = [
+    "бог", "бога", "боге", "бож", "теизм", "атеизм", "агностиц",
+    "смерть", "смыс", "жизн", "мораль", "добро", "зло", "свобода", "воля",
+    "дружб", "любов", "страх", "тревог", "счаст", "страдан",
+    "деньг", "богат", "бедн", "справедлив", "долг", "честь", "стыд", "вина",
+    "сознани", "я", "личност", "идентич", "время", "истина",
+]
+
+# Если длинная личная история + "у меня/мне/я" — скорее это ситуация, не "что такое"
+PERSONAL_MARKERS = ["у меня", "мне", "меня", "я ", "я-", "со мной", "мой", "моя", "моё", "мы ", "нам "]
+SITUATION_MARKERS = ["проблем", "тяжело", "плохо", "не могу", "боюсь", "тревож", "устал", "злюсь", "депрес", "паник", "бессонниц"]
+
+SCHOOL_SWITCH = [
+    "через будд", "через стоик", "через экзист", "через конфуци",
+    "через сократ", "через кант", "через ницше",
+    "не стоически", "не стоик", "а через", "другую оптику", "другой взгляд",
+]
+
+
+def _norm(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def detect_philosophy_topic_intent(user_text: str) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Returns (is_topic, meta)
+    meta: {"score": int, "reason": str}
+    """
+    t = _norm(user_text)
+
+    if not t:
+        return False, {"score": 0, "reason": "empty"}
+
+    score = 0
+    reason = []
+
+    # 1) Сильные конструкции
+    for m in TOPIC_MARKERS:
+        if m in t:
+            score += 1
+            reason.append(f"marker:{m}")
+            break
+
+    # 2) Темы (бог/смерть/дружба/мораль…)
+    if any(tok in t for tok in PHILOSOPHY_TOPICS):
+        score += 2
+        reason.append("topic")
+
+    # 3) Явный запрос "через X оптику" усиливает
+    if any(m in t for m in SCHOOL_SWITCH):
+        score += 2
+        reason.append("school_switch")
+
+    # 4) Штраф: длинная личная ситуация
+    if len(t) >= 160 and any(pm in t for pm in PERSONAL_MARKERS) and any(sm in t for sm in SITUATION_MARKERS):
+        score -= 2
+        reason.append("penalty:personal_situation")
+
+    # 5) Если это "что такое X" — обычно topic даже при наличии "я"
+    if t.startswith("что такое") or t.startswith("что значит"):
+        score += 1
+        reason.append("starts_with_definition")
+
+    is_topic = score >= 3
+    return is_topic, {"score": score, "reason": ", ".join(reason)[:180]}

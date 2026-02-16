@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from router import detect_financial_pattern
 from intent_capabilities import detect_capabilities_intent, CAPABILITIES_REPLY_RU
+from intent_philosophy_topic import detect_philosophy_topic_intent
 from utils.is_philosophy_question import (
     is_direct_philosophy_intent,
     is_philosophy_question as _is_philosophy_question,
@@ -187,6 +188,25 @@ def governor_plan(
             "intent": "capabilities",
             "cap_score": cap.score,
             "direct_reply_text": CAPABILITIES_REPLY_RU,
+        }
+
+    # P1: Philosophy topic gate (concept/explain questions: Бог/смерть/дружба/смысл/мораль и т.д.)
+    is_topic, topic_meta = detect_philosophy_topic_intent(user_text)
+    if is_topic:
+        return {
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_warmup": True,
+            "disable_fork": True,
+            "disable_option_close": False,
+            "philosophy_pipeline": True,
+            "allow_philosophy_examples": True,
+            "explain_mode": True,
+            "max_questions": 1,
+            "max_practices": 0,
+            "min_chars": 900,
+            "intent": "philosophy_topic",
+            "intent_meta": topic_meta,
         }
 
     # Fix Pack D: Buddhism/tradition switch → explain_mode + philosophy_pipeline (highest priority)

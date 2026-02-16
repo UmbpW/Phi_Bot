@@ -998,16 +998,17 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             raw_llm_text = reply_text
             reply_text = postprocess_response(reply_text, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
             # Fix Pack D: retry expand if floor violated (rich request, answer < 900)
+            # P1: plan.min_chars overrides default (e.g. philosophy_topic → 900)
             # TEST COST OPTIMIZER: skip expand when EVAL_NO_EXPAND=1
-            needs_floor = rich_request or plan.get("philosophy_pipeline") or plan.get("explain_mode")
-            floor_chars = int(os.getenv("EVAL_MIN_CHARS", "900")) if os.getenv("EVAL_MIN_CHARS") else 900
+            needs_floor = rich_request or plan.get("philosophy_pipeline") or plan.get("explain_mode") or plan.get("min_chars")
+            floor_chars = int(plan.get("min_chars") or os.getenv("EVAL_MIN_CHARS", "900"))
             if (
                 needs_floor
                 and not os.getenv("EVAL_NO_EXPAND")
                 and len((reply_text or "").strip()) < floor_chars
                 and guidance_ctx_for_completion
             ):
-                expand_hint = "Ответ должен быть не менее 900 символов. Разверни мысль, добавь пример или слой анализа."
+                expand_hint = f"Ответ должен быть не менее {floor_chars} символов. Разверни мысль, добавь пример или слой анализа."
                 gc = guidance_ctx_for_completion
                 ctx_expand = (gc["ctx"] + f"\n\n[требование: {expand_hint}]").strip() if gc.get("ctx") else f"[требование: {expand_hint}]"
                 reply_text2 = call_openai(gc["system_prompt"], gc["user_text"], context_block=ctx_expand)
