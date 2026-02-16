@@ -30,6 +30,15 @@ def format_readability_ru(text: str) -> str:
     # Ensure bullet dashes start on new line
     t = re.sub(r"(?<!\n)\s+—\s+", r"\n— ", t)
 
+    # Always: new paragraph before philosopher names (Кьеркегор, Сартр, Камю, ...)
+    philosopher_names = [
+        "Кьеркегор", "Сартр", "Камю", "Конфуций", "Сократ", "Платон",
+        "Аристотель", "Кант", "Ницше", "Хайдеггер", "Будда", "Спиноза",
+        "Сенека", "Эпиктет", "Марк Аврелий", "Шопенгауэр", "Юнг", "Фрейд",
+    ]
+    for name in philosopher_names:
+        t = re.sub(rf"(?<=[.!?])\s+(?={re.escape(name)}\s*[:(])", "\n\n", t)
+
     if is_monolith:
         pivots = [
             "Есть", "Но", "При этом", "Поэтому", "Во-первых",
