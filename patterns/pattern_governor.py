@@ -6,6 +6,7 @@ from typing import Any, Optional
 from router import detect_financial_pattern
 from intent_capabilities import detect_capabilities_intent, CAPABILITIES_REPLY_RU
 from intent_philosophy_topic import detect_philosophy_topic_intent
+from intent_topic_v2 import is_topic_high, is_topic_mid
 from utils.is_philosophy_question import (
     is_direct_philosophy_intent,
     is_philosophy_question as _is_philosophy_question,
@@ -172,6 +173,7 @@ def governor_plan(
     user_text: str,
     context: dict,
     state: dict,
+    llm_classify_fn=None,
 ) -> dict:
     """Возвращает план для pattern engine."""
     # CAPABILITIES INTENT: "что ты умеешь / чем полезен" → canned reply, без warmup
@@ -208,6 +210,41 @@ def governor_plan(
             "intent": "philosophy_topic",
             "intent_meta": topic_meta,
         }
+
+    # PATCH E: Topic Gate V2 — topic_high (score >= 5) или topic_mid + LLM
+    if is_topic_high(user_text):
+        return {
+            "philosophy_pipeline": True,
+            "allow_philosophy_examples": True,
+            "disable_warmup": True,
+            "disable_fork": True,
+            "disable_option_close": False,
+            "answer_first_required": True,
+            "disable_pattern_engine": True,
+            "stage_override": "guidance",
+            "explain_mode": True,
+            "max_questions": 1,
+            "max_practices": 0,
+            "min_chars": 900,
+            "intent": "philosophy_topic_high",
+        }
+    if is_topic_mid(user_text) and llm_classify_fn:
+        if llm_classify_fn(user_text):
+            return {
+                "philosophy_pipeline": True,
+                "allow_philosophy_examples": True,
+                "disable_warmup": True,
+                "disable_fork": True,
+                "disable_option_close": False,
+                "answer_first_required": True,
+                "disable_pattern_engine": True,
+                "stage_override": "guidance",
+                "explain_mode": True,
+                "max_questions": 1,
+                "max_practices": 0,
+                "min_chars": 900,
+                "intent": "philosophy_topic_llm",
+            }
 
     # Fix Pack D: Buddhism/tradition switch → explain_mode + philosophy_pipeline (highest priority)
     if _has_buddhism_switch(user_text):
@@ -398,6 +435,10 @@ def governor_plan(
 
     # Страховка: answer_first → pattern_engine жёстко выключен
     if plan.get("answer_first_required"):
+        plan["disable_pattern_engine"] = True
+
+    # PATCH E: priority guard — philosophy_pipeline → pattern_engine выключен
+    if plan.get("philosophy_pipeline"):
         plan["disable_pattern_engine"] = True
 
     # FIX C: synth persona impatient_pragmatic — hates short answers

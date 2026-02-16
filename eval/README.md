@@ -44,6 +44,9 @@ python3 -m eval.run_synth_simulation --mode product --only-failed --failed-from 
 
 # Сбросить кэш
 rm -rf eval/.cache_llm
+
+# E1.1: cost control — пропустить LLM-классификатор intent для topic_mid (дешевле)
+EVAL_SKIP_LLM_INTENT=1 python3 -m eval.run_synth_simulation --mode fast --limit 4
 ```
 
 Отчёт сохраняется в `eval/reports/report_YYYYMMDD_HHMM.json`. В нём: `dialogues` (per-dialog violations), `cost_telemetry` (calls, cached_hits, tokens, cost_usd_est).
@@ -73,6 +76,12 @@ python eval/run_synth_simulation.py --out_dir ./my_eval_out
 - PyYAML: `pip install pyyaml`
 - OpenAI API key в `.env` (OPENAI_API_KEY)
 - PHI_EVAL=1 задаётся внутри скрипта — TELEGRAM_TOKEN не требуется
+
+### Переменные cost control (E1.1)
+
+| Переменная | Значение | Описание |
+|------------|----------|----------|
+| EVAL_SKIP_LLM_INTENT | 1 | Пропустить LLM-классификатор intent для topic_mid (дешевле eval) |
 
 ## Структура
 

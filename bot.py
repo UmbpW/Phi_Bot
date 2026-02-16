@@ -362,6 +362,51 @@ def _extract_usage(response, inst: str, input_text: str, output_text: str) -> di
 EVAL_CALL_METAS: list = []
 
 
+# E1.1: cost control — eval can skip LLM intent classifier for topic_mid
+EVAL_SKIP_LLM_INTENT = os.getenv("EVAL_SKIP_LLM_INTENT", "0") == "1"
+
+
+def llm_classify_topic_intent(user_text: str) -> bool:
+    """PATCH E: cheap intent classifier via mini model — философско-понятийный вопрос?"""
+    if EVAL_SKIP_LLM_INTENT:
+        return False
+    t = (user_text or "").strip()
+    if not t:
+        return False
+    key_obj = {"ns": "intent_topic_llm", "v": 1, "text": t.lower()}
+    cache_dir = os.getenv("EVAL_CACHE_DIR", "eval/cache").strip()
+    try:
+        from eval.llm_cache import cache_get, cache_put
+        hit = cache_get(cache_dir, key_obj)
+        if hit is not None and isinstance(hit, dict):
+            return hit.get("is_topic", False)
+    except Exception:
+        pass
+    instructions = (
+        "Классифицируй запрос пользователя. "
+        "Это философско-понятийный вопрос (объяснить идею, школу, концепт, взгляд философии)? "
+        "Ответ только JSON: {\"is_topic\": true} или {\"is_topic\": false}"
+    )
+    model = os.getenv("INTENT_CLASSIFIER_MODEL", "gpt-4o-mini")
+    try:
+        response = openai_client.responses.create(
+            model=model,
+            instructions=instructions,
+            input=t,
+            max_output_tokens=20,
+        )
+        text = (_extract_response_text(response) or "").strip().lower()
+        is_topic = bool(re.search(r'is_topic["\']?\s*:\s*true', text))
+    except Exception:
+        is_topic = False
+    try:
+        from eval.llm_cache import cache_put
+        cache_put(cache_dir, key_obj, {"is_topic": is_topic})
+    except Exception:
+        pass
+    return is_topic
+
+
 def call_openai(
     system_prompt: str,
     user_text: str,
@@ -757,11 +802,11 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             state["last_user_text"] = user_text
             state["last_bot_text"] = reply_text
             append_history(HISTORY_STORE, user_id, "assistant", reply_text)
-            return {"reply_text": finalize_reply(reply_text, {}), "telemetry": {"stage": "guidance"}, "mode": None, "stage": "guidance"}
+            return {"reply_text": finalize_reply(reply_text, {}), "telemetry": {"stage": "guidance", "intent": "short_ack"}, "mode": None, "stage": "guidance"}
 
     if check_safety(user_text):
         safe_text = get_safe_response()
-        return {"reply_text": finalize_reply(safe_text, {"max_questions": 1}), "telemetry": {"stage": "safety"}, "mode": None, "stage": "safety"}
+        return {"reply_text": finalize_reply(safe_text, {"max_questions": 1}), "telemetry": {"stage": "safety", "intent": "safety"}, "mode": None, "stage": "safety"}
 
     history_count = len(HISTORY_STORE.get(user_id, []))
     current_stage = USER_STAGE.get(user_id)
@@ -776,7 +821,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         append_history(HISTORY_STORE, user_id, "assistant", gate_text)
         state["last_user_text"] = user_text
         state["last_bot_text"] = gate_text
-        return {"reply_text": finalize_reply(gate_text, {"max_questions": 1}), "telemetry": {"stage": "guidance", "first_turn_gate": True}, "mode": None, "stage": "guidance"}
+        return {"reply_text": finalize_reply(gate_text, {"max_questions": 1}), "telemetry": {"stage": "guidance", "first_turn_gate": True, "intent": "first_turn_gate"}, "mode": None, "stage": "guidance"}
 
     USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
     stage = _get_stage(user_id, user_text)
@@ -792,7 +837,11 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
 
     context = {"stage": stage, "user_text_len": len((user_text or "").strip()), "is_safety": False, "is_resistance": is_resistance, "is_confusion": is_confusion, "want_fork": want_fork, "want_option_close": want_option_close, "enable_philosophy_match": ENABLE_PHILOSOPHY_MATCH}
     context = resolve_pattern_collisions(context)
-    plan = governor_plan(user_id, stage, user_text, context, state)
+    # E1.1: pass None when EVAL_SKIP_LLM_INTENT → topic_mid won't trigger LLM
+    plan = governor_plan(
+        user_id, stage, user_text, context, state,
+        llm_classify_fn=None if EVAL_SKIP_LLM_INTENT else llm_classify_topic_intent,
+    )
     if plan.get("direct_reply_text"):
         reply_text = finalize_reply(plan["direct_reply_text"], plan)
         append_history(HISTORY_STORE, user_id, "user", user_text)
@@ -861,7 +910,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         append_history(HISTORY_STORE, user_id, "assistant", ORIENTATION_MESSAGE_RU)
         state["last_user_text"] = user_text
         state["last_bot_text"] = ORIENTATION_MESSAGE_RU
-        return {"reply_text": finalize_reply(ORIENTATION_MESSAGE_RU, {"max_questions": 1}), "telemetry": {"stage": "warmup", "orientation": True}, "mode": None, "stage": "warmup"}
+        return {"reply_text": finalize_reply(ORIENTATION_MESSAGE_RU, {"max_questions": 1}), "telemetry": {"stage": "warmup", "orientation": True, "intent": "orientation"}, "mode": None, "stage": "warmup"}
 
     mode_tag = None
     selected_names = []
@@ -942,7 +991,8 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
                 mode_tag = "financial_rhythm"
             else:
                 selected_names = select_lenses(user_text, all_lenses, max_lenses=plan.get("max_lenses", 3))
-                if "lens_general" in selected_names and "lens_control_scope" in all_lenses:
+                # P1: philosophy concept questions — не подменять lens_general на lens_control_scope
+                if "lens_general" in selected_names and "lens_control_scope" in all_lenses and not plan.get("philosophy_pipeline"):
                     selected_names = ["lens_control_scope" if n == "lens_general" else n for n in selected_names]
                     selected_names = list(dict.fromkeys(selected_names))
                 if plan.get("answer_first_required"):
@@ -1105,7 +1155,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         state["force_expand_next"] = True
     if state.get("orientation_lock"):
         state["orientation_lock"] = False
-    telemetry = {"stage": stage, "mode_tag": mode_tag, "lenses": selected_names, "pattern_id": pattern_id}
+    telemetry = {"stage": stage, "mode_tag": mode_tag, "lenses": selected_names, "pattern_id": pattern_id, "intent": plan.get("intent", "none")}
     return {"reply_text": reply_text, "telemetry": telemetry, "mode": mode_tag, "stage": stage}
 
 
