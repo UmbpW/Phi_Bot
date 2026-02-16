@@ -133,8 +133,8 @@ BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 
 
 def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
-    """Fix Pack B + PATCH F: unified postprocess. clamp_questions — ПОСЛЕДНИЙ шаг.
-    Порядок: strip_meta_tail → clamp_practice → style_guards → readability → completion_guard → meta_tail_to_fork → clamp_questions."""
+    """Fix Pack B + PATCH F: unified postprocess.
+    Порядок: strip_meta_tail → clamp_practice → style_guards → completion_guard → meta_tail_to_fork → clamp_questions → readability (ПОСЛЕДНИЙ, чтобы clamp_questions не затирал переносы)."""
     plan = plan or {}
     out = (text or "").strip()
     if not out:
@@ -143,12 +143,12 @@ def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
     out = clamp_to_first_practice_only(out)
     ban_empathy = plan.get("philosophy_pipeline") or plan.get("answer_first_required") or plan.get("explain_mode")
     out = apply_style_guards(out, ban_empathy_openers=ban_empathy, answer_first=plan.get("answer_first_required", False))
-    # PATCH F: readability formatter (paragraph breaks, enumerations, bullets)
-    if not plan.get("disable_readability_formatter"):
-        out = format_readability_ru(out)
     out = completion_guard(out, max_questions=plan.get("max_questions", 1))
     out = meta_tail_to_fork_or_close(out, max_questions=plan.get("max_questions", 1))
     out = clamp_questions(out, max_questions=plan.get("max_questions", 1))
+    # PATCH F: readability formatter ПОСЛЕДНИМ — clamp_questions использует " ".join() и затирает переносы
+    if not plan.get("disable_readability_formatter"):
+        out = format_readability_ru(out)
     return out.strip()
 
 DEBUG = os.getenv("DEBUG", "0") == "1"

@@ -35,14 +35,16 @@ def format_readability_ru(text: str) -> str:
             "Есть", "Но", "При этом", "Поэтому", "Во-первых",
             "Во-вторых", "С другой стороны", "Другая", "Важно",
             "Если", "Когда", "Чтобы", "И ещё", "И еще",
+            "Вместо", "Важнее", "То есть", "Однако", "При этом",
         ]
         for p in pivots:
-            t = re.sub(rf"(?<=\.)\s+(?={re.escape(p)}\b)", "\n\n", t)
+            t = re.sub(rf"(?<=[.!?])\s+(?={re.escape(p)}\b)", "\n\n", t)
 
+        # Break after sentence when next starts with uppercase (Russian)
         def _break_long(m):
             return "\n\n" if len(t) > 900 else " "
 
-        t = re.sub(r"(?<=\.)\s+(?=[А-ЯЁ])", _break_long, t, count=2)
+        t = re.sub(r"(?<=[.!?])\s+(?=[А-ЯЁ])", _break_long, t, count=3)
 
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     return t
