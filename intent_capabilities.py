@@ -68,7 +68,7 @@ def detect_capabilities_intent(user_text: str) -> CapIntentResult:
     return CapIntentResult(is_cap, score, reasons)
 
 
-CAPABILITIES_REPLY_RU = """Если чуть шире — я умею смотреть на один и тот же вопрос через разные философские взгляды.
+CAPABILITIES_REPLY_RU = """Вот что я умею — смотреть на один и тот же вопрос через разные философские взгляды.
 
 Например:
 — про страх: как стоики — через контроль, принятие неопределённости и тренировку спокойствия

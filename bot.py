@@ -146,7 +146,8 @@ def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
     out = meta_tail_to_fork_or_close(out, max_questions=plan.get("max_questions", 1))
     out = clamp_questions(out, max_questions=plan.get("max_questions", 1))
     return out.strip()
-DEBUG = True
+
+DEBUG = os.getenv("DEBUG", "0") == "1"
 
 # Feature flags
 ENABLE_TOOLS_CMD = True
