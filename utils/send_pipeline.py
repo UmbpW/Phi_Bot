@@ -1,5 +1,6 @@
 """Unified send pipeline: single point for all user-facing messages."""
 
+import re
 from typing import Optional, Any, TYPE_CHECKING, List
 
 from utils.output_sanitizer import sanitize_output
@@ -9,6 +10,23 @@ if TYPE_CHECKING:
 
 # v21.2: Telegram limit 4096, safe split threshold
 TELEGRAM_SAFE_SPLIT_THRESHOLD = 3500
+
+# v21.5: meta-openers — удалять из начала частей 2+ при split (чтобы второе сообщение не начиналось с «Когда X...»)
+META_OPENER_STARTS = (
+    "когда ответов много", "когда внутри нет ясности", "когда нет ясности",
+    "когда внутри много", "когда легко утонуть", "когда легко запутаться",
+)
+
+
+def _strip_meta_opener_from_start(text: str) -> str:
+    """Удалить первое предложение, если начинается с meta-opener."""
+    if not text or not text.strip():
+        return text
+    parts = re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)
+    first = parts[0].strip().lower()
+    if any(first.startswith(p) for p in META_OPENER_STARTS):
+        return parts[1].strip() if len(parts) > 1 else ""
+    return text.strip()
 
 
 def _split_by_paragraphs(text: str, max_chars: int = TELEGRAM_SAFE_SPLIT_THRESHOLD) -> List[str]:
@@ -50,6 +68,12 @@ async def send_text(
         return None
 
     parts = _split_by_paragraphs(clean_text)
+    # v21.5: у частей 2+ убрать meta-opener в начале (иначе второе сообщение начинается с «Когда X...»)
+    for i in range(1, len(parts)):
+        stripped = _strip_meta_opener_from_start(parts[i])
+        if stripped:
+            parts[i] = stripped
+    parts = [p for p in parts if p.strip()]
     last_msg = None
     for i, part in enumerate(parts):
         is_last = i == len(parts) - 1

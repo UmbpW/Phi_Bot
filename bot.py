@@ -1040,7 +1040,11 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             if rich_request and not plan.get("philosophy_pipeline") and not plan.get("explain_mode"):
                 system_prompt += "\n\nОтвет: развёрнуто, не менее 900 символов. Без ultra-short."
             if plan.get("philosophy_pipeline"):
-                system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
+                system_prompt += (
+                    "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
+                    "\n---\nЗАПРЕЩЕНО: начинать с абстрактной подводки («Когда ответов много», «Когда внутри нет ясности» и т.п.). Сразу отвечать на вопрос."
+                    "\n---\nОдин связный ответ. Не дублировать содержание вторым блоком с переформулировкой."
+                )
             if plan.get("explain_mode"):
                 # Fix Pack D2: structure requirement вместо только length floor
                 expl = (
