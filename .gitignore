@@ -8,3 +8,4 @@ dataset/*
 *.jsonl
 exports/
 reports/
+eval/.cache_llm/

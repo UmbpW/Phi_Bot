@@ -60,6 +60,10 @@ def explain_too_short(user_text: str, bot_text: str, min_len: int = 550) -> bool
     return len((bot_text or "").strip()) < min_len
 
 
+def _norm_word(w: str) -> str:
+    """Нормализация для сравнения: убрать пунктуацию в конце."""
+    return (w or "").rstrip(".,!?;:…\"'")
+
 def looks_like_context_drop(prev_user: str, bot_text: str) -> bool:
     """Бот похоже потерял контекст — generic ответ на конкретный вопрос."""
     if not prev_user or not bot_text:
@@ -68,7 +72,8 @@ def looks_like_context_drop(prev_user: str, bot_text: str) -> bool:
     bot_lower = (bot_text or "").lower()
     if len(prev_user.strip()) < 30:
         return False
-    context_words = [w for w in prev_lower.split() if len(w) > 4][:5]
+    raw_words = [w for w in prev_lower.split() if len(w) > 4][:5]
+    context_words = [_norm_word(w) for w in raw_words if _norm_word(w)]
     matches = sum(1 for w in context_words if w in bot_lower)
     return matches == 0 and len(prev_user) > 50
 

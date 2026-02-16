@@ -2,7 +2,53 @@
 
 Тестовый стенд с LLM-симулятором пользователей для оценки UX-регрессий.
 
-## Запуск
+## TEST COST OPTIMIZER V1 (режимы + кэш)
+
+| Режим   | Модель бота | Min chars | Expand retry | Пример                      |
+|---------|-------------|-----------|--------------|-----------------------------|
+| fast    | gpt-5-mini  | 320       | нет          | Каждый коммит, ~5–10× дешевле |
+| product | gpt-5.2     | 900       | да           | Продуктовый прогон          |
+| release | gpt-5.2     | 900       | да           | Полный релизный прогон      |
+
+```bash
+# FAST — дешёвый прогон каждый коммит
+python3 -m eval.run_synth_simulation --mode fast --limit 4
+
+# PRODUCT — продуктовый прогон
+python3 -m eval.run_synth_simulation --mode product --limit 9
+
+# RELEASE — полный прогон
+python3 -m eval.run_synth_simulation --mode release --limit 20
+
+# Без кэша
+python3 -m eval.run_synth_simulation --mode fast --no-cache
+
+# Удалить кэш
+rm -rf eval/.cache_llm
+```
+
+## TEST COST OPTIMIZER V1.1 (run-only-failed + cost telemetry)
+
+```bash
+# FAST — дёшево, каждый коммит
+python3 -m eval.run_synth_simulation --mode fast --limit 4
+
+# PRODUCT — качество, реже
+python3 -m eval.run_synth_simulation --mode product --limit 9
+
+# RERUN ONLY FAILED — после product, только падающие диалоги
+python3 -m eval.run_synth_simulation --mode product --only-failed --limit 9
+
+# Указать отчёт явно
+python3 -m eval.run_synth_simulation --mode product --only-failed --failed-from eval/reports/report_20260215_1200.json --limit 9
+
+# Сбросить кэш
+rm -rf eval/.cache_llm
+```
+
+Отчёт сохраняется в `eval/reports/report_YYYYMMDD_HHMM.json`. В нём: `dialogues` (per-dialog violations), `cost_telemetry` (calls, cached_hits, tokens, cost_usd_est).
+
+## Запуск (legacy)
 
 ```bash
 # Полный прогон (все персоны × все сценарии)
@@ -35,6 +81,9 @@ eval/
   synth_personas.yaml   # 10 персон
   synth_scenarios.yaml  # 18+ сценариев
   synth_user_agent.py   # LLM-симулятор (gpt-4.1-mini)
+  llm_cache.py          # TEST COST OPTIMIZER: кэш LLM-ответов
+  .cache_llm/           # Кэш (можно удалить: rm -rf eval/.cache_llm)
+  reports/              # Отчёты report_YYYYMMDD_HHMM.json (для --only-failed)
   checks.py             # Эвристики UX-регрессий
   run_synth_simulation.py
   out/                  # JSONL диалоги YYYYMMDD_HHMM/*.jsonl

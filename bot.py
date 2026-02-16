@@ -68,6 +68,7 @@ from utils.state_store import load_state, save_state
 from utils.short_ack import is_short_ack
 from utils.context_pack import pack_context, append_history
 from utils.intent_gate import is_unclear_message, should_skip_warmup_first_turn
+from utils.context_anchor import apply_context_anchor
 from philosophy.first_turn_templates import render_first_turn_philosophy
 from patterns.pattern_engine import (
     load_patterns,
@@ -82,6 +83,7 @@ from patterns.pattern_governor import (
     governor_plan,
     resolve_pattern_collisions,
     is_philosophy_question,
+    _has_buddhism_switch,
 )
 from patterns.agency_layer import (
     strip_meta_format_questions,
@@ -320,37 +322,104 @@ def _extract_response_text(response) -> str:
     return result or "Не удалось получить ответ."
 
 
+def _approx_tokens_from_text(s: str) -> int:
+    """Грубая оценка: ~4 символа на токен для RU/EN микса."""
+    if not s:
+        return 0
+    return max(1, (len(s) + 3) // 4)
+
+
+def _extract_usage(response, inst: str, input_text: str, output_text: str) -> dict:
+    """Извлекает usage из response; при отсутствии — приблизительная оценка."""
+    usage = {}
+    usage_obj = getattr(response, "usage", None)
+    if usage_obj:
+        usage = {
+            "input_tokens": getattr(usage_obj, "input_tokens", None) or getattr(usage_obj, "input_tokens_count", None),
+            "output_tokens": getattr(usage_obj, "output_tokens", None) or getattr(usage_obj, "output_tokens_count", None),
+            "total_tokens": getattr(usage_obj, "total_tokens", None) or getattr(usage_obj, "total_tokens_count", None),
+        }
+    if not usage.get("input_tokens"):
+        usage["input_tokens"] = _approx_tokens_from_text(inst) + _approx_tokens_from_text(input_text)
+    if not usage.get("output_tokens"):
+        usage["output_tokens"] = _approx_tokens_from_text(output_text)
+    if not usage.get("total_tokens"):
+        usage["total_tokens"] = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+    return usage
+
+
+# TEST COST OPTIMIZER V1.1: список метаданных вызовов LLM для телеметрии (очищается в начале каждого generate_reply_core)
+EVAL_CALL_METAS: list = []
+
+
 def call_openai(
     system_prompt: str,
     user_text: str,
     force_short: bool = False,
     context_block: str = "",
 ) -> str:
-    """Вызывает OpenAI Responses API. context_block — упакованный контекст диалога."""
-    model_name = OPENAI_MODEL
+    """Вызывает OpenAI Responses API. context_block — упакованный контекст диалога.
+    TEST COST OPTIMIZER V1: при EVAL_CACHE_DIR — кэш; при EVAL_MODEL — модель; при EVAL_MAX_TOKENS — лимит."""
+    model_name = os.getenv("EVAL_MODEL") or OPENAI_MODEL
     inst = system_prompt
     if force_short:
         inst += "\n\nОтветь короче и разговорнее. Без лекций."
     input_text = user_text
     if context_block:
         input_text = f"[Контекст диалога]\n{context_block}\n\n[Текущее сообщение]\n{user_text}"
+
+    cache_dir = os.getenv("EVAL_CACHE_DIR", "").strip()
+    use_cache = bool(cache_dir) and os.getenv("EVAL_USE_CACHE", "1") != "0"
+    max_tokens_env = os.getenv("EVAL_MAX_TOKENS")
+    max_output_tokens = int(max_tokens_env) if max_tokens_env and max_tokens_env.isdigit() else None
+
+    key_obj = {"ns": "bot", "model": model_name, "instructions": inst, "input": input_text, "force_short": force_short}
+    if use_cache:
+        try:
+            from eval.llm_cache import cache_get, cache_put
+            hit = cache_get(cache_dir, key_obj)
+            if hit and isinstance(hit, dict) and "text" in hit:
+                meta = {"cached_hit": True, "model": model_name, "usage": hit.get("usage", {})}
+                if os.getenv("EVAL_CACHE_DIR"):
+                    EVAL_CALL_METAS.append(meta)
+                return hit["text"]
+        except Exception:
+            pass
+
+    kwargs = {"model": model_name, "instructions": inst, "input": input_text}
+    if max_output_tokens:
+        kwargs["max_output_tokens"] = max_output_tokens
+
     try:
-        response = openai_client.responses.create(
-            model=model_name,
-            instructions=inst,
-            input=input_text,
-        )
-        return _extract_response_text(response)
+        response = openai_client.responses.create(**kwargs)
+        text = _extract_response_text(response)
+        usage = _extract_usage(response, inst, input_text, text)
+        if use_cache:
+            try:
+                from eval.llm_cache import cache_put
+                cache_put(cache_dir, key_obj, {"text": text, "usage": usage})
+            except Exception:
+                pass
+        if os.getenv("EVAL_CACHE_DIR"):
+            EVAL_CALL_METAS.append({"cached_hit": False, "model": model_name, "usage": usage})
+        return text
     except Exception as e:
         if DEBUG:
             print(f"[Phi] model {model_name} failed, fallback to gpt-5.2-mini: {e}")
+        if os.getenv("EVAL_MODEL"):
+            raise
         try:
+            fallback_model = "gpt-5.2-mini"
             response = openai_client.responses.create(
-                model="gpt-5.2-mini",
+                model=fallback_model,
                 instructions=inst,
                 input=input_text,
             )
-            return _extract_response_text(response)
+            text = _extract_response_text(response)
+            usage = _extract_usage(response, inst, input_text, text)
+            if os.getenv("EVAL_CACHE_DIR"):
+                EVAL_CALL_METAS.append({"cached_hit": False, "model": fallback_model, "usage": usage})
+            return text
         except Exception as e2:
             return f"Ошибка API: {str(e2)}"
 
@@ -654,10 +723,12 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
     Возвращает: {"reply_text": str, "telemetry": dict, "mode": str|None, "stage": str|None}
     Использует глобальные USER_STATE, HISTORY_STORE, USER_STAGE, USER_MSG_COUNT, LAST_LENS_BY_USER.
     Вызывается из process_user_query и из eval/run_synth_simulation.
+    TEST COST OPTIMIZER V1.1: в eval очищает EVAL_CALL_METAS для телеметрии.
     """
+    if os.getenv("EVAL_CACHE_DIR"):
+        EVAL_CALL_METAS.clear()
     if not user_text:
         return {"reply_text": "Не удалось распознать текст.", "telemetry": {}, "mode": None, "stage": None}
-
     state = USER_STATE.get(user_id)
     if not state:
         return {"reply_text": "[Ошибка: нет state]", "telemetry": {}, "mode": None, "stage": None}
@@ -869,8 +940,20 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             if plan.get("philosophy_pipeline"):
                 system_prompt += "\n\nОтвет: развёрнуто, не менее ~900 символов. Без короткого режима."
             if plan.get("explain_mode"):
-                expl = "\n\n---\nEXPLAIN_MODE: Развёрнутое объяснение. Структура: коротко что понял (1–2 предл.); как это устроено (2–4 предл.); два варианта/слоя если уместно; пример на случай пользователя. Практика — макс 1, только если просит советы. В конце макс ОДИН вопрос. Без списков из 10 пунктов, без «давай выберем угол». СТРОГО не менее 900 символов."
-                if any(k in (user_text or "").lower() for k in ("пример", "покажи", "как выглядит", "на моём случае", "на моем случае")):
+                # Fix Pack D2: structure requirement вместо только length floor
+                expl = (
+                    "\n\n---\nEXPLAIN_MODE: Структура обязательна (без заголовков, но по смыслу):\n"
+                    "1) Первый абзац: заявленная оптика (если попросили через буддизм/другую — именно её рамку). "
+                    "2) Середина: 2–3 пункта или нумерованные предложения — как это работает в случае пользователя. "
+                    "3) Конец: одно практическое переформулирование (не новая практика каждый раз), затем макс 1 вопрос. "
+                    "Практика — макс 1, только если просит советы. СТРОГО не менее 900 символов."
+                )
+                if _has_buddhism_switch(user_text or ""):
+                    expl += (
+                        "\n\n---\nБУДДИЙСКАЯ ОПТИКА: Мягко, без лекции. Ключи: дуккха/танха (привязанность к контролю), "
+                        "непостоянство, осознанность к тяге к определённости. Переведи на язык пользователя, не академично."
+                    )
+                elif any(k in (user_text or "").lower() for k in ("пример", "покажи", "как выглядит", "на моём случае", "на моем случае")):
                     expl += " Обязательно включи конкретный пример."
                 system_prompt += expl
             if plan.get("allow_philosophy_examples") and (detect_financial_pattern(user_text) or any(k in (user_text or "").lower() for k in ("смысл", "выбор", "решен", "нереш", "ценност"))):
@@ -888,13 +971,20 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             raw_llm_text = reply_text
             reply_text = postprocess_response(reply_text, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
             # Fix Pack D: retry expand if floor violated (rich request, answer < 900)
+            # TEST COST OPTIMIZER: skip expand when EVAL_NO_EXPAND=1
             needs_floor = rich_request or plan.get("philosophy_pipeline") or plan.get("explain_mode")
-            if needs_floor and len((reply_text or "").strip()) < 900 and guidance_ctx_for_completion:
+            floor_chars = int(os.getenv("EVAL_MIN_CHARS", "900")) if os.getenv("EVAL_MIN_CHARS") else 900
+            if (
+                needs_floor
+                and not os.getenv("EVAL_NO_EXPAND")
+                and len((reply_text or "").strip()) < floor_chars
+                and guidance_ctx_for_completion
+            ):
                 expand_hint = "Ответ должен быть не менее 900 символов. Разверни мысль, добавь пример или слой анализа."
                 gc = guidance_ctx_for_completion
                 ctx_expand = (gc["ctx"] + f"\n\n[требование: {expand_hint}]").strip() if gc.get("ctx") else f"[требование: {expand_hint}]"
                 reply_text2 = call_openai(gc["system_prompt"], gc["user_text"], context_block=ctx_expand)
-                if len((reply_text2 or "").strip()) >= 900:
+                if len((reply_text2 or "").strip()) >= floor_chars:
                     reply_text = postprocess_response(reply_text2, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
             stable_match = detect_stable_pattern(user_text)
             if should_inject(state, stage, stable_match, is_safety=False):
@@ -961,6 +1051,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             state["practice_cooldown_turns"] = COOLDOWN_AFTER_PRACTICE
         tick_practice_cooldown(state)
         tick_lens_lock(state)
+    prev_user_for_anchor = state.get("last_user_text")
     append_history(HISTORY_STORE, user_id, "user", user_text)
     append_history(HISTORY_STORE, user_id, "assistant", reply_text)
     state["last_user_text"] = user_text
@@ -976,6 +1067,11 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             reply_text2 = postprocess_response(reply_text2, stage, philosophy_pipeline=plan.get("philosophy_pipeline", False), mode_tag=mode_tag, answer_first_required=plan.get("answer_first_required", False), explain_mode=plan.get("explain_mode", False))
             reply_text2 = final_send_clamp(reply_text2, **clamp_kw)
         reply_text = reply_text2
+    # Fix Pack D2: context anchor before finalize (prev_user = previous turn's user message)
+    reply_text, _anchor_dbg = apply_context_anchor(
+        reply_text, user_text, prev_user=prev_user_for_anchor,
+        turn_index=state.get("turn_index", 0), plan=plan, debug=False
+    )
     reply_text = finalize_reply(reply_text, plan)
     if stage == "guidance" and len((reply_text or "").strip()) < 280:
         state["force_expand_next"] = True
