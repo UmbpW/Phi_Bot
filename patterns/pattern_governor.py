@@ -4,6 +4,7 @@ import random
 from typing import Any, Optional
 
 from router import detect_financial_pattern
+from intent_capabilities import detect_capabilities_intent, CAPABILITIES_REPLY_RU
 from utils.is_philosophy_question import (
     is_direct_philosophy_intent,
     is_philosophy_question as _is_philosophy_question,
@@ -172,6 +173,22 @@ def governor_plan(
     state: dict,
 ) -> dict:
     """Возвращает план для pattern engine."""
+    # CAPABILITIES INTENT: "что ты умеешь / чем полезен" → canned reply, без warmup
+    cap = detect_capabilities_intent(user_text)
+    if cap.is_capabilities:
+        return {
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_warmup": True,
+            "disable_fork": True,
+            "disable_option_close": True,
+            "max_questions": 0,
+            "max_practices": 0,
+            "intent": "capabilities",
+            "cap_score": cap.score,
+            "direct_reply_text": CAPABILITIES_REPLY_RU,
+        }
+
     # Fix Pack D: Buddhism/tradition switch → explain_mode + philosophy_pipeline (highest priority)
     if _has_buddhism_switch(user_text):
         return {

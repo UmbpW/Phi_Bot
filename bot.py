@@ -792,6 +792,14 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
     context = {"stage": stage, "user_text_len": len((user_text or "").strip()), "is_safety": False, "is_resistance": is_resistance, "is_confusion": is_confusion, "want_fork": want_fork, "want_option_close": want_option_close, "enable_philosophy_match": ENABLE_PHILOSOPHY_MATCH}
     context = resolve_pattern_collisions(context)
     plan = governor_plan(user_id, stage, user_text, context, state)
+    if plan.get("direct_reply_text"):
+        reply_text = finalize_reply(plan["direct_reply_text"], plan)
+        append_history(HISTORY_STORE, user_id, "user", user_text)
+        append_history(HISTORY_STORE, user_id, "assistant", reply_text)
+        state["last_user_text"] = user_text
+        state["last_bot_text"] = reply_text
+        tel = {"stage": "guidance", "intent": "capabilities", "cap_score": plan.get("cap_score", 0)}
+        return {"reply_text": reply_text, "telemetry": tel, "mode": None, "stage": "guidance"}
     stage = plan.get("stage_override") or stage
     USER_STAGE[user_id] = stage
 
