@@ -798,6 +798,8 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         append_history(HISTORY_STORE, user_id, "assistant", reply_text)
         state["last_user_text"] = user_text
         state["last_bot_text"] = reply_text
+        state["turn_index"] = turn_index
+        USER_STAGE[user_id] = "guidance"
         tel = {"stage": "guidance", "intent": "capabilities", "cap_score": plan.get("cap_score", 0)}
         return {"reply_text": reply_text, "telemetry": tel, "mode": None, "stage": "guidance"}
     stage = plan.get("stage_override") or stage

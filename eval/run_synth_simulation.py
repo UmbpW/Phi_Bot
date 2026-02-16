@@ -77,7 +77,12 @@ def _find_latest_report(path_hint: Optional[str] = None) -> Optional[str]:
     """Найти последний отчёт JSON. path_hint — явный путь."""
     if path_hint and os.path.exists(path_hint):
         return path_hint
-    for base in ["eval/reports", "reports", str(PROJECT_ROOT / "eval" / "reports"), str(PROJECT_ROOT / "reports")]:
+    for base in [
+        str(PROJECT_ROOT / "eval" / "reports"),
+        str(PROJECT_ROOT / "reports"),
+        "eval/reports",
+        "reports",
+    ]:
         if os.path.isdir(base):
             candidates = glob.glob(os.path.join(base, "*.json"))
             if candidates:
