@@ -836,17 +836,21 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
     # иначе fallback "decision" даёт ответ про выбор/зона контроля вместо ответа на вопрос
     is_concept = detect_philosophy_topic_intent(user_text)[0] or is_topic_high(user_text)
     if should_skip_warmup_first_turn(state, user_text, history_count, current_stage) and not is_concept:
-        gate_text, _ = render_first_turn_philosophy(user_text)
-        gate_text = enforce_constraints(gate_text, "guidance", load_patterns().get("global_constraints", {}))
-        USER_STAGE[user_id] = "guidance"
-        USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
-        state["turn_index"] = state.get("turn_index", 0) + 1
-        state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
-        append_history(HISTORY_STORE, user_id, "user", user_text)
-        append_history(HISTORY_STORE, user_id, "assistant", gate_text)
-        state["last_user_text"] = user_text
-        state["last_bot_text"] = gate_text
-        return {"reply_text": finalize_reply(gate_text, {"max_questions": 1}), "telemetry": {"stage": "guidance", "first_turn_gate": True, "intent": "first_turn_gate"}, "mode": None, "stage": "guidance"}
+        gate_text, gate_label = render_first_turn_philosophy(user_text)
+        if not gate_text or gate_label == "skip":
+            gate_text = None
+        if gate_text:
+            gate_text = enforce_constraints(gate_text, "guidance", load_patterns().get("global_constraints", {}))
+            USER_STAGE[user_id] = "guidance"
+            USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
+            state["turn_index"] = state.get("turn_index", 0) + 1
+            state["guidance_turns_count"] = state.get("guidance_turns_count", 0) + 1
+            append_history(HISTORY_STORE, user_id, "user", user_text)
+            # Не добавлять gate-ответ в историю — иначе «заражает» последующие ответы
+            # append_history(HISTORY_STORE, user_id, "assistant", gate_text)  # skip
+            state["last_user_text"] = user_text
+            state["last_bot_text"] = gate_text
+            return {"reply_text": finalize_reply(gate_text, {"max_questions": 1}), "telemetry": {"stage": "guidance", "first_turn_gate": True, "intent": "first_turn_gate", "label": gate_label}, "mode": None, "stage": "guidance"}
 
     USER_MSG_COUNT[user_id] = USER_MSG_COUNT.get(user_id, 0) + 1
     stage = _get_stage(user_id, user_text)

@@ -1,5 +1,55 @@
 """First Turn Philosophy Gate: шаблоны ответа первого хода (answer-first, без generic warmup)."""
 
+from typing import Optional, Tuple
+
+# Religion/confession: topic question vs personal confession (PATCH: не MONEY для «расскажи про Бога»)
+RELIGION_MARKERS = (
+    "бог", "бога", "боге", "богом", "религ", "вера", "вере", "верю", "атеизм", "теизм", "деизм",
+    "конфесс", "церков", "христиан", "ислам", "коран", "иудаизм", "тора",
+    "будд", "будда", "буддизм", "дхарма", "карма", "нирван", "сансар",
+    "грех", "молитв", "покаян", "рай", "ад",
+)
+TOPIC_ASK_MARKERS = (
+    "расскажи", "объясни", "как", "почему", "есть ли", "существует ли",
+    "позиция", "взгляд", "что думают",
+)
+PERSONAL_MARKERS = (
+    "я ", "мне", "у меня", "со мной", "моя ", "мой ", "стыд", "вина",
+    "страшно", "пугает", "сомневаюсь", "не верю", "верю",
+)
+
+RELIGION_BRIDGE = "Вопрос о Боге обычно упирается не только в «истину», но и в опору: смысл, страх, ответственность, надежду."
+RELIGION_OPTICS = (
+    "Теистическая оптика: Бог — личный источник смысла/нормы (часто в религиях книги).",
+    "Деистическая/философская: Бог как первопричина/закон, без постоянного вмешательства.",
+    "Атеистическая: смысл и этика строятся без сверхъестественного основания.",
+    "Буддийская (классическая): нет необходимости в Творце; важнее причинность и освобождение от страдания.",
+)
+RELIGION_QUESTION = "Тебе интереснее: (1) что говорит буддизм, (2) философские доказательства, (3) как это влияет на жизнь и этику?"
+
+
+def _is_religion_topic_question(text: str) -> bool:
+    """Тематический вопрос о религии — НЕ шаблон first_turn, идёт в philosophy_pipeline."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if not any(m in t for m in RELIGION_MARKERS):
+        return False
+    return any(a in t for a in TOPIC_ASK_MARKERS) or "?" in t or t.startswith("про ")
+
+
+def _is_religious_personal_confession(text: str) -> bool:
+    """Личная конфессиональная история — религия + личные маркеры, НЕ topic question."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if not any(m in t for m in RELIGION_MARKERS):
+        return False
+    if _is_religion_topic_question(text):
+        return False
+    return any(p in t for p in PERSONAL_MARKERS)
+
+
 # A) decision/нерешительность
 DECISION_BRIDGE = "Выбор связан с риском и ответственностью — мозг ищет гарантию, которой нет."
 DECISION_OPTICS = (
@@ -45,19 +95,23 @@ def _is_money_intent(text: str) -> bool:
     return any(k in t for k in ("деньг", "бедност", "богатств"))
 
 
-def _is_confession_intent(text: str) -> bool:
-    t = text.lower()
-    return any(k in t for k in ("конфесс", "религ", "христиан", "ислам", "будд", "молитв", "вера"))
-
-
 def _is_meaning_life_intent(text: str) -> bool:
     """Смысл жизни / экзистенциальная пустота — без денег."""
     t = text.lower()
     return any(k in t for k in ("смысл", "зачем жить", "бессмыслен", "пустота", "зачем вообще"))
 
 
-def render_first_turn_philosophy(user_text: str) -> tuple[str, str]:
-    """Возвращает (текст ответа, intent_label для лога). ≤14 строк, 1 вопрос в конце."""
+def render_first_turn_philosophy(user_text: str) -> Tuple[Optional[str], str]:
+    """Возвращает (текст ответа, intent_label). None + «skip» — не отдавать шаблон, идти в philosophy_pipeline."""
+    # 1) topic религии — НЕ отдаём first_turn шаблон
+    if _is_religion_topic_question(user_text):
+        return None, "skip"
+
+    # 2) личная конфессиональная история — RELIGION_* шаблон
+    if _is_religious_personal_confession(user_text):
+        lines = [RELIGION_BRIDGE, ""] + list(RELIGION_OPTICS) + ["", RELIGION_QUESTION]
+        return "\n".join(lines), "religion_confession"
+
     if _is_decision_intent(user_text):
         lines = [
             DECISION_BRIDGE,
@@ -92,10 +146,6 @@ def render_first_turn_philosophy(user_text: str) -> tuple[str, str]:
         )
         lines = [MEANING_BRIDGE, ""] + list(MEANING_OPTICS) + ["", "Тебе важнее облегчение сейчас или направление на ближайшее время?"]
         return "\n".join(lines), "meaning"
-
-    if _is_confession_intent(user_text):
-        lines = [MONEY_BRIDGE, ""] + list(MONEY_OPTICS) + ["", CONFESSION_ADD, "", MONEY_QUESTION]
-        return "\n".join(lines), "confession"
 
     if _is_money_intent(user_text):
         lines = [MONEY_BRIDGE, ""] + list(MONEY_OPTICS) + ["", MONEY_QUESTION]
