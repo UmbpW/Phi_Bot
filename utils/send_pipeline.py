@@ -1,9 +1,12 @@
 """Unified send pipeline: single point for all user-facing messages."""
 
+import logging
 import re
 from typing import Optional, Any, TYPE_CHECKING, List
 
 from utils.output_sanitizer import sanitize_output
+
+_send_log = logging.getLogger("phi.send")
 
 if TYPE_CHECKING:
     from aiogram.types import Message
@@ -60,6 +63,7 @@ async def send_text(
     stage: Optional[str] = None,
     parse_mode: Optional[str] = None,
     reply_markup: Optional[Any] = None,
+    correlation_id: Optional[str] = None,
 ) -> Optional["Message"]:
     """Отправка текста пользователю. sanitize_output — последний шаг перед отправкой.
     v21.2: если текст > 3500 символов — разбить на 2 сообщения по абзацам."""
@@ -78,6 +82,8 @@ async def send_text(
     parts = [p for p in parts if p.strip()]
     last_msg = None
     for i, part in enumerate(parts):
+        if correlation_id:
+            _send_log.info("send part=%s/%s correlation_id=%s chat_id=%s", i + 1, len(parts), correlation_id, chat_id)
         is_last = i == len(parts) - 1
         last_msg = await bot.send_message(
             chat_id=chat_id,

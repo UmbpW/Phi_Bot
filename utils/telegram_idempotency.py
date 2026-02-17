@@ -65,4 +65,5 @@ class IdempotencyMiddleware(BaseMiddleware):
             if _seen.seen(update_id):
                 return  # дубликат — не обрабатываем, не вызываем handler
             _seen.mark(update_id)
+            data["update_id"] = update_id  # BUG3: для логирования в handlers
         return await handler(event, data)

@@ -36,18 +36,58 @@ UNCLEAR_MARKERS = [
     "нет сил", "опустош", "тревож", "страшно", "один", "одна",
 ]
 
+# BUG2: ориентация не должна быть дефолтом для религиозных тем
+ORIENTATION_RELIGION_BLOCK = ("вер", "бог", "грех", "молитв", "религ", "стыд", "вина", "совест", "конфесс")
+
+# BUG2: расширены под вера/стыд/вина (конфликт с верой, мне стыдно)
 TOPIC_MARKERS = [
     "деньг", "финанс", "сон", "работ", "отношен", "любов", "смерт", "здоров",
     "тело", "проект", "долг", "кредит", "аренд", "родител", "ребен", "семь",
+    "вер", "стыд", "вина", "грех", "совест", "религ", "вера", "молитв", "конфликт",
 ]
+
+# BUG2: ack/close — «понял, спасибо» и т.п., не triage
+ACK_CLOSE_PHRASES = (
+    "понял", "спасибо", "ясно", "ок всё", "ок, всё", "всё ясно", "принял",
+    "хорошо", "благодарю", "ясненько", "окей", "ясно спасибо",
+    "понятно", "принято", "супер", "отлично",
+)
+
+
+def is_ack_close_intent(text: str) -> bool:
+    """True если короткое подтверждение/закрытие — ack, не orientation."""
+    if not text:
+        return False
+    t = (text or "").strip().lower().replace(",", " ").replace(".", " ")
+    t = " ".join(t.split())
+    if len(t) > 25:
+        return False
+    if t in ACK_CLOSE_PHRASES:
+        return True
+    return any(t.startswith(p) for p in ("понял", "спасибо", "ясно", "принял")) or (
+        t.startswith("ок") and len(t) <= 12
+    )
+
+
+def has_religion_in_orientation_context(text: str) -> bool:
+    """True если текст про религию/веру — orientation не должен быть дефолтом."""
+    if not text:
+        return False
+    t = (text or "").strip().lower()
+    return any(m in t for m in ORIENTATION_RELIGION_BLOCK)
 
 
 def is_unclear_message(text: str) -> bool:
-    """True если короткий/расплывчатый вход без конкретной темы → orientation fallback."""
+    """True если короткий/расплывчатый вход без конкретной темы → orientation fallback.
+    BUG2: ack/close и religion markers — не unclear."""
     if not text:
         return True
     t = (text or "").strip().lower()
 
+    if is_ack_close_intent(text):
+        return False
+    if has_religion_in_orientation_context(text):
+        return False
     if len(t) >= 160:
         return False
     if any(m in t for m in TOPIC_MARKERS):

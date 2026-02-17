@@ -67,7 +67,12 @@ from utils.telegram_idempotency import IdempotencyMiddleware
 from utils.state_store import load_state, save_state
 from utils.short_ack import is_short_ack
 from utils.context_pack import pack_context, append_history
-from utils.intent_gate import is_unclear_message, should_skip_warmup_first_turn
+from utils.intent_gate import (
+    is_ack_close_intent,
+    is_unclear_message,
+    should_skip_warmup_first_turn,
+    has_religion_in_orientation_context,
+)
 from utils.context_anchor import apply_context_anchor
 from philosophy.first_turn_templates import render_first_turn_philosophy
 from patterns.pattern_engine import (
@@ -516,6 +521,9 @@ TOOLS_MENU = """Инструменты Phi Bot
 
 Напиши: «хочу инструмент 2» — и я разверну его."""
 
+# BUG2: ack/close — короткий ответ без triage
+ACK_CLOSE_REPLY_RU = "Хорошо. Если захочешь продолжить разговор — напиши."
+
 # PATCH 6: Orientation fallback — мягкий вход для расплывчатых сообщений
 ORIENTATION_MESSAGE_RU = (
     "Слышу, что сейчас непросто. Чтобы не стрелять советами мимо, давай выберем угол.\n\n"
@@ -835,10 +843,21 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
     # FIX: концептуальные вопросы (бог, философы 21 века) — не использовать first_turn gate,
     # иначе fallback "decision" даёт ответ про выбор/зона контроля вместо ответа на вопрос
     is_concept = detect_philosophy_topic_intent(user_text)[0] or is_topic_high(user_text)
-    if should_skip_warmup_first_turn(state, user_text, history_count, current_stage) and not is_concept:
+    skip_warmup = should_skip_warmup_first_turn(state, user_text, history_count, current_stage)
+    # BUG1: telemetry для отладки роутинга
+    _logger.info(
+        "routing: history_count=%s stage=%s is_concept=%s skip_warmup=%s",
+        history_count, current_stage, is_concept, skip_warmup,
+    )
+    if skip_warmup and not is_concept:
         gate_text, gate_label = render_first_turn_philosophy(user_text)
+        # BUG1: hard-guard — религия + вопрос ⇒ никогда first_turn (идти в pipeline)
+        if gate_text and has_religion_in_orientation_context(user_text):
+            if any(m in (user_text or "").lower() for m in ("расскажи", "объясни", "как ", "какие", "?")):
+                gate_text, gate_label = None, "skip"
         if not gate_text or gate_label == "skip":
             gate_text = None
+        _logger.info("first_turn gate_label=%s gate_text=%s", gate_label, "yes" if gate_text else "no")
         if gate_text:
             gate_text = enforce_constraints(gate_text, "guidance", load_patterns().get("global_constraints", {}))
             USER_STAGE[user_id] = "guidance"
@@ -923,6 +942,14 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         plan["disable_pattern_engine"] = True
         stage = plan.get("stage_override") or stage
         USER_STAGE[user_id] = stage
+
+    # BUG2: ack/close («понял, спасибо») — короткий ответ, без triage/orientation
+    if is_ack_close_intent(user_text):
+        append_history(HISTORY_STORE, user_id, "user", user_text)
+        append_history(HISTORY_STORE, user_id, "assistant", ACK_CLOSE_REPLY_RU)
+        state["last_user_text"] = user_text
+        state["last_bot_text"] = ACK_CLOSE_REPLY_RU
+        return {"reply_text": finalize_reply(ACK_CLOSE_REPLY_RU, {"max_questions": 0}), "telemetry": {"stage": "guidance", "intent": "ack_close"}, "mode": None, "stage": "guidance"}
 
     if (
         not handled_orientation_choice
@@ -1195,9 +1222,15 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
     return {"reply_text": reply_text, "telemetry": telemetry, "mode": mode_tag, "stage": stage}
 
 
-async def process_user_query(message: Message, user_text: str) -> None:
+async def process_user_query(message: Message, user_text: str, update_id: Optional[int] = None) -> None:
     """Обрабатывает текст пользователя (общая логика для текста и голоса)."""
     user_id = message.from_user.id if message.from_user else 0
+    # BUG3: логирование для отладки дублей
+    _logger.info(
+        "update_id=%s message_id=%s chat_id=%s user_id=%s text=%s",
+        update_id, getattr(message, "message_id", None), message.chat.id, user_id,
+        (user_text or "")[:80].replace("\n", " "),
+    )
 
     if not user_text:
         await send_text(bot, message.chat.id, "Не удалось распознать текст. Попробуйте написать или записать снова.")
@@ -1248,11 +1281,12 @@ async def process_user_query(message: Message, user_text: str) -> None:
     tel = result.get("telemetry", {})
     log_dialog(user_id, user_text, tel.get("lenses", []), reply_text)
     save_state(_state_to_persist())
-    await send_text(bot, message.chat.id, reply_text, reply_markup=FEEDBACK_KEYBOARD)
+    corr = f"u{update_id}_m{getattr(message, 'message_id', '?')}" if update_id else None
+    await send_text(bot, message.chat.id, reply_text, reply_markup=FEEDBACK_KEYBOARD, correlation_id=corr)
 
 
 @dp.message(F.voice)
-async def handle_voice(message: Message) -> None:
+async def handle_voice(message: Message, **kwargs) -> None:
     """Обработка голосовых сообщений."""
     status_msg = await send_text(bot, message.chat.id, "Слушаю...")
     try:
@@ -1267,16 +1301,19 @@ async def handle_voice(message: Message) -> None:
             tmp_path.unlink(missing_ok=True)
         if status_msg:
             await status_msg.delete()
-        await process_user_query(message, user_text)
+        await process_user_query(message, user_text or "", update_id=kwargs.get("update_id"))
     except Exception as e:
         if status_msg:
             await status_msg.edit_text(f"Не удалось обработать голос: {e}")
 
 
 @dp.message(F.text)
-async def handle_message(message: Message) -> None:
-    """Обработка текстовых сообщений."""
-    await process_user_query(message, message.text or "")
+async def handle_message(message: Message, **kwargs) -> None:
+    """Обработка текстовых сообщений. BUG3: guard от команд, update_id для логов."""
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return  # команды обрабатывают Command/CommandStart, не F.text
+    await process_user_query(message, text or message.text or "", update_id=kwargs.get("update_id"))
 
 
 @dp.callback_query(F.data.startswith("fb_"))
