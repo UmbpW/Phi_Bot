@@ -12,7 +12,11 @@ from utils.is_philosophy_question import (
     is_direct_philosophy_intent,
     is_philosophy_question as _is_philosophy_question,
 )
-from utils.intent_gate import is_expand_request, is_philosophy_intent as _is_philosophy_intent
+from utils.intent_gate import (
+    is_expand_request,
+    is_philosophy_intent as _is_philosophy_intent,
+    has_religion_in_orientation_context,
+)
 
 # Короткие ответы — не переспрашивать "что имел в виду"
 SHORT_AMBIGUOUS = ("оба", "все", "да", "нет", "ок", "окей", "и то и то")
@@ -177,6 +181,21 @@ def governor_plan(
     llm_classify_fn=None,
 ) -> dict:
     """Возвращает план для pattern engine."""
+    # BUG2: религиозный короткий запрос → явно в philosophy, не в warmup/orientation
+    if has_religion_in_orientation_context(user_text):
+        return {
+            "stage_override": "guidance",
+            "answer_first_required": True,
+            "disable_warmup": True,
+            "disable_fork": True,
+            "philosophy_pipeline": True,
+            "allow_philosophy_examples": True,
+            "max_questions": 1,
+            "max_practices": 0,
+            "min_chars": 900,
+            "intent": "religion_short",
+        }
+
     # CAPABILITIES INTENT: "что ты умеешь / чем полезен" → canned reply, без warmup
     cap = detect_capabilities_intent(user_text)
     if cap.is_capabilities:

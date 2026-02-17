@@ -39,11 +39,18 @@ def _is_religion_topic_question(text: str) -> bool:
 
 
 def _is_religious_personal_confession(text: str) -> bool:
-    """Личная конфессиональная история — религия + личные маркеры, НЕ topic question."""
+    """Личная конфессиональная история — религия + личные маркеры, НЕ topic question.
+    «Верю в себя» — НЕ религиозная конфессия (верю/вера требуют религиозного якоря)."""
     t = (text or "").strip().lower()
     if not t:
         return False
     if not any(m in t for m in RELIGION_MARKERS):
+        return False
+    # «верю/вера» без якоря (бог/грех/молитв/церков/ислам/христиан/будд/религ/конфесс) → не религия
+    faith_only = any(m in t for m in ("вера", "вере", "верю", "верой", "веру")) and not any(
+        a in t for a in ("бог", "грех", "молитв", "церков", "ислам", "христиан", "будд", "религ", "конфесс")
+    )
+    if faith_only:
         return False
     if _is_religion_topic_question(text):
         return False

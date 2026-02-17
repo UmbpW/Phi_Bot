@@ -684,8 +684,13 @@ ABOUT_TEXT = (
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    """Приветствие по /start. Онбординг — только пример работы бота, не часть диалога."""
+    """Приветствие по /start. Онбординг — только пример работы бота, не часть диалога.
+    Если после /start идёт текст (/start привет) — после онбординга обрабатываем хвост как обычное сообщение."""
     uid = message.from_user.id if message.from_user else 0
+    # Хвост: /start привет → tail = "привет"
+    raw = (message.text or "").strip()
+    parts = raw.split(None, 1)
+    tail = (parts[1].strip() if len(parts) > 1 else "") or ""
     # Онбординг не считается первым ответом: очищаем историю, диалог начинается с нуля
     if uid in HISTORY_STORE:
         HISTORY_STORE[uid] = []
@@ -712,6 +717,8 @@ async def cmd_start(message: Message) -> None:
     save_state(_state_to_persist())
     log_event("onboarding_shown", user_id=uid)
     await send_text(bot, message.chat.id, ONBOARDING_MESSAGE_RU.strip())
+    if tail:
+        await process_user_query(message, tail, update_id=None)
 
 
 @dp.message(Command("about"))
@@ -857,6 +864,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
                 gate_text, gate_label = None, "skip"
         if not gate_text or gate_label == "skip":
             gate_text = None
+        # gate_text=None/skip: user попадёт в историю в основном pipeline (append_history ниже, ~1197)
         _logger.info("first_turn gate_label=%s gate_text=%s", gate_label, "yes" if gate_text else "no")
         if gate_text:
             gate_text = enforce_constraints(gate_text, "guidance", load_patterns().get("global_constraints", {}))
@@ -943,8 +951,9 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         stage = plan.get("stage_override") or stage
         USER_STAGE[user_id] = stage
 
-    # BUG2: ack/close («понял, спасибо») — короткий ответ, без triage/orientation
+    # BUG2: ack/close («понял, спасибо») — короткий ответ, без triage; stage=guidance чтобы след. вопрос не warmup
     if is_ack_close_intent(user_text):
+        USER_STAGE[user_id] = "guidance"
         append_history(HISTORY_STORE, user_id, "user", user_text)
         append_history(HISTORY_STORE, user_id, "assistant", ACK_CLOSE_REPLY_RU)
         state["last_user_text"] = user_text
