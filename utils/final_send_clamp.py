@@ -14,12 +14,24 @@ def _split_sentences(text: str) -> list:
 
 
 # v21.1: ban-opener — первое предложение (financial_rhythm / philosophy_pipeline / answer-first)
-# v21.5: + meta-подводки «Когда X — легко Y» (не связаны с вопросом)
+# v21.5: + meta-подводки «Когда X — легко Y»
+# v21.6: safeguards — удалять только если короткое, без сущностей, остаток > 250; иначе — нейтральный мост
 BAN_OPENER_STARTS = (
     "похоже", "похоже,", "похоже что", "кажется", "кажется,", "с таким",
     "когда ответов много", "когда внутри нет ясности", "когда нет ясности",
+)
+# v21.6: рискованно широкие — применять только если нет контекста (ты/у тебя/в твоём случае)
+BAN_OPENER_RISKY = (
     "когда внутри много", "когда легко утонуть", "когда легко запутаться",
 )
+OPENER_MAX_LEN = 140  # удалять только если первое предложение короче
+SUBJECT_ENTITIES = (
+    "бог", "бога", "деньг", "сон", "страх", "тревог", "выбор", "смысл",
+    "дружб", "любов", "морал", "свобод", "полезно", "важно", "пример",
+)
+CONTEXTUAL_MARKERS = ("ты ", "у тебя", "в твоём", "в твоей", " тебе ", " тво")
+NEUTRAL_BRIDGE = "По существу:"
+MIN_REST_AFTER_REMOVE = 250
 
 # v21.1: meta-tail hard drop — предложения с этими фразами удаляются целиком
 META_TAIL_HARD_PHRASES = (
@@ -62,8 +74,34 @@ def final_send_clamp(
     )
     if apply_ban_opener and sentences:
         first_lower = sentences[0].lower().strip()
-        if any(first_lower.startswith(p) for p in BAN_OPENER_STARTS):
-            sentences = sentences[1:]
+        first_len = len(sentences[0])
+        rest = " ".join(sentences[1:]) if len(sentences) > 1 else ""
+        rest_len = len(rest)
+
+        # Проверка: безопасно ли удалять?
+        safe_to_remove = (
+            first_len < OPENER_MAX_LEN
+            and not any(e in first_lower for e in SUBJECT_ENTITIES)
+            and rest_len >= MIN_REST_AFTER_REMOVE
+        )
+
+        # Рискованные паттерны — только если нет контекста (ты/у тебя/в твоём) в первых 14 словах
+        first_text = " ".join(sentences[:2] if len(sentences) >= 2 else sentences)
+        first_14_words = " ".join(first_text.split()[:14]).lower()
+        has_context = any(m in first_14_words for m in CONTEXTUAL_MARKERS)
+
+        matches_ban = any(first_lower.startswith(p) for p in BAN_OPENER_STARTS)
+        matches_risky = not has_context and any(first_lower.startswith(p) for p in BAN_OPENER_RISKY)
+
+        if matches_ban or matches_risky:
+            if safe_to_remove:
+                sentences = sentences[1:]
+            elif len(sentences) > 1:
+                # Замена на нейтральный мост: opener + второй абзац (без потери контекста)
+                s1 = sentences[1]
+                lead = (s1[0].lower() + s1[1:]) if len(s1) > 1 else s1.lower()
+                sentences[0] = NEUTRAL_BRIDGE + " " + lead
+                sentences.pop(1)
 
     # A2) Meta-tail hard drop — всегда, в любом месте ответа
     sentences = [s for s in sentences if not any(p in s.lower() for p in META_TAIL_HARD_PHRASES)]
