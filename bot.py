@@ -128,6 +128,7 @@ from philosophy.recommendation_pause import (
 )
 from philosophy.style_guards import clamp_questions, strip_meta_tail, apply_style_guards
 from response_postprocess import format_readability_ru
+from semantic_blocks import format_reply_md
 from philosophy.practice_cooldown import (
     strip_practice_content,
     contains_practice,
@@ -140,13 +141,18 @@ BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 
 
 def finalize_reply(text: str, plan: Optional[dict] = None) -> str:
-    """Fix Pack B + PATCH F: unified postprocess.
-    Порядок: strip_meta_tail → clamp_practice → style_guards → completion_guard → meta_tail_to_fork → clamp_questions → readability (ПОСЛЕДНИЙ, чтобы clamp_questions не затирал переносы)."""
-    plan = plan or {}
+    """Fix Pack B + PATCH F + PATCH G: unified postprocess.
+    Порядок: strip_meta_tail → format_reply_md (semantic blocks) → clamp_practice → style_guards
+    → completion_guard → meta_tail_to_fork → clamp_questions → readability."""
+    if plan is None:
+        plan = {}
     out = (text or "").strip()
     if not out:
         return out
     out = strip_meta_tail(out)
+    # PATCH G: semantic blocks Markdown (longform/explain/philosophy only)
+    out, blocks_used = format_reply_md(out, plan)
+    plan["blocks_used"] = blocks_used
     out = clamp_to_first_practice_only(out)
     ban_empathy = plan.get("philosophy_pipeline") or plan.get("answer_first_required") or plan.get("explain_mode")
     out = apply_style_guards(out, ban_empathy_openers=ban_empathy, answer_first=plan.get("answer_first_required", False))
@@ -274,7 +280,7 @@ def transcribe_voice(audio_path: Path) -> str:
 
 
 def _explain_mode_instructions_ru() -> str:
-    """PATCH F: инструкция для режима разъяснения — развернуто, понятно, без вопросов."""
+    """PATCH F + PATCH G: инструкция для режима разъяснения + blocks contract."""
     return (
         "Пользователь просит разъяснение. Сделай ответ более развернутым и понятным: "
         "1) кратко переформулируй, что именно объясняешь; "
@@ -282,7 +288,14 @@ def _explain_mode_instructions_ru() -> str:
         "3) дай 1 короткий пример; "
         "4) завершай без вопросов. "
         "Пиши читабельно: абзацы и маркеры, без полотна. "
-        "Тон: живой, спокойный, без формальностей и без давления."
+        "Тон: живой, спокойный, без формальностей и без давления.\n\n"
+        "---\n"
+        "[EXPLAIN_MODE_BLOCKS_CONTRACT] Если пользователь просит «объясни», «разбери», «шире», «покажи варианты», «сравни», «поясни детальнее»: "
+        "1) Сформируй ответ как семантические блоки в JSON и помести его строго между тегами: <BLOCKS_JSON> ... </BLOCKS_JSON> "
+        "2) Схема JSON: {\"lead\": \"1–2 предложения по сути\", \"sections\": [{\"title\": \"Заголовок\", \"body\": \"2–5 предложений\", \"bullets\": []}], "
+        "\"bridge\": null, \"question\": \"опционально один финальный вопрос\"} "
+        "3) Никаких других тегов, никакого второго дублирующего блока. "
+        "4) Не добавляй мета-фразы про «рамки», «оптики», «сейчас разберём философски» — начинай по делу."
     )
 
 
@@ -1227,7 +1240,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         state["force_expand_next"] = True
     if state.get("orientation_lock"):
         state["orientation_lock"] = False
-    telemetry = {"stage": stage, "mode_tag": mode_tag, "lenses": selected_names, "pattern_id": pattern_id, "intent": plan.get("intent", "none")}
+    telemetry = {"stage": stage, "mode_tag": mode_tag, "lenses": selected_names, "pattern_id": pattern_id, "intent": plan.get("intent", "none"), "blocks_used": plan.get("blocks_used", "none")}
     return {"reply_text": reply_text, "telemetry": telemetry, "mode": mode_tag, "stage": stage}
 
 
