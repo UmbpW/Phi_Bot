@@ -70,16 +70,39 @@ def extract_blocks_heuristic(text: str) -> Optional[Dict[str, Any]]:
     if not text or len(text) < 450:
         return None
 
+    sections: List[Dict[str, Any]] = []
+    bridge = None
+    question = None
+
+    # Try "Title on own line, then — body" first (works with single \n between sections)
+    _QUESTION_START_BLOCK = ("если ", "что ", "как ", "какой", "какая", "какое", "когда ", "почему ")
+    title_line_then_dash = re.findall(
+        r"(?:^|\n)([A-ZА-ЯЁ][^\n]{2,55})\n\s*—\s+([^\n]+(?:\n(?![A-ZА-ЯЁ][^\n]{2,55}\n\s*—\s)[^\n]*)*)",
+        text,
+        re.MULTILINE,
+    )
+    if len(title_line_then_dash) >= 2:
+        valid = []
+        for title, body in title_line_then_dash:
+            title, body = title.strip(), body.strip()
+            if not title or not body or len(body) <= 15:
+                continue
+            if title.lower().startswith(_QUESTION_START_BLOCK):
+                continue
+            valid.append((title, body))
+        if len(valid) >= 2:
+            lead_end = text.find(valid[0][0])
+            lead = text[:lead_end].strip() if lead_end > 0 else ""
+            for title, body in valid:
+                sections.append({"title": title, "body": body, "bullets": []})
+            return {"lead": lead, "sections": sections, "bridge": bridge, "question": question}
+
     chunks = [c.strip() for c in re.split(r"\n\s*\n+", text) if c.strip()]
     if len(chunks) < 2:
         return None
 
     lead = chunks[0]
     rest = chunks[1:]
-
-    sections: List[Dict[str, Any]] = []
-    bridge = None
-    question = None
 
     last = rest[-1]
     if "?" in last and len(last) < 280:
@@ -100,6 +123,7 @@ def extract_blocks_heuristic(text: str) -> Optional[Dict[str, Any]]:
             if len(sections) >= 2:
                 return {"lead": lead, "sections": sections, "bridge": bridge, "question": question}
 
+    # Same-line: "Title — body"
     candidates = re.split(r"\n(?=[A-ZА-ЯЁ][^\n]{1,60}\s+—\s+)", buf)
     if len(candidates) >= 2:
         for c in candidates:
