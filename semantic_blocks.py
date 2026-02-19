@@ -56,6 +56,10 @@ def _split_title_body(block: str) -> Tuple[Optional[str], Optional[str]]:
         title = m.group(1).strip()
         body = m.group(2).strip()
         return title, body
+    # "Title: body" (1) Аналитическая традиция: уточняют...)
+    m2 = re.match(r"^(.{3,80}?)\s*[.:]\s+(.{20,})", block, flags=re.DOTALL)
+    if m2:
+        return m2.group(1).strip(), m2.group(2).strip()
     lines = [l.strip() for l in block.splitlines() if l.strip()]
     if len(lines) >= 2 and len(lines[0]) <= 80:
         return lines[0], "\n".join(lines[1:]).strip()
@@ -74,7 +78,24 @@ def extract_blocks_heuristic(text: str) -> Optional[Dict[str, Any]]:
     bridge = None
     question = None
 
-    # Try "Title on own line, then — body" first (works with single \n between sections)
+    # Try "1) Title: body" / "2) Title — body" numbered sections
+    numbered = re.split(r"\s*(?=\d\)\s)", text)
+    if len(numbered) >= 3:  # lead + 2+ sections
+        parts = [p.strip() for p in numbered if p.strip() and re.match(r"^\d\)", p.strip())]
+        if len(parts) >= 2:
+            lead = numbered[0].strip() if numbered[0].strip() and not re.match(r"^\d\)", numbered[0].strip()) else ""
+            if not lead and numbered[0].strip():
+                lead = re.sub(r"^\d\)\s*", "", numbered[0].strip())
+                parts = parts[1:]
+            for p in parts:
+                p = re.sub(r"^\d\)\s*", "", p)
+                title, body = _split_title_body(p)
+                if title and body and len(body) > 30:
+                    sections.append({"title": title, "body": body, "bullets": []})
+            if len(sections) >= 2:
+                return {"lead": lead or None, "sections": sections, "bridge": bridge, "question": question}
+
+    # Try "Title on own line, then — body" (works with single \n between sections)
     _QUESTION_START_BLOCK = ("если ", "что ", "как ", "какой", "какая", "какое", "когда ", "почему ")
     title_line_then_dash = re.findall(
         r"(?:^|\n)([A-ZА-ЯЁ][^\n]{2,55})\n\s*—\s+([^\n]+(?:\n(?![A-ZА-ЯЁ][^\n]{2,55}\n\s*—\s)[^\n]*)*)",
@@ -198,7 +219,7 @@ def _is_longform_plan(plan: Dict[str, Any]) -> bool:
         return False
     if plan.get("explain_mode"):
         return True
-    if plan.get("philosophy_pipeline") and plan.get("answer_first_required"):
+    if plan.get("philosophy_pipeline"):
         return True
     return False
 
