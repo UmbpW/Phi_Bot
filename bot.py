@@ -1017,7 +1017,8 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         else:
             reply_text = "Уточни, пожалуйста — с чего начать?"
         want_option_close = False
-    elif plan.get("force_philosophy_mode") and not get_active_lens(state) and len((user_text or "").strip()) <= 250 and not detect_financial_pattern(user_text):
+    elif plan.get("force_philosophy_mode") and not plan.get("philosophy_pipeline") and not get_active_lens(state) and len((user_text or "").strip()) <= 250 and not detect_financial_pattern(user_text):
+        # Lens preview только для расплывчатых запросов (поговорим про философию). Конкретные topic-вопросы (расскажи про X) — в LLM, не preview
         reply_text = render_lens_preview("guidance" if detect_lens_preview_need(user_text) else "default") + "\n\n" + render_lens_soft_question()
         reply_text = enforce_constraints(reply_text, "guidance", load_patterns().get("global_constraints", {}))
         state["last_lens_preview_turn"] = turn_index
