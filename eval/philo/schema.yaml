@@ -1,0 +1,45 @@
+version: 1.1
+node:
+  required: [id, kind, name]
+  kind_enum: [philosopher, school, concept]
+  fields:
+    id: string
+    name: string
+    name_ru: string|null
+    kind: enum              # philosopher | school | concept
+    birth_year: int|null    # from P569
+    born: int|null          # alias, deprecated
+    died: int|null
+    era: string|null        # ancient|medieval|early_modern|modern|contemporary
+    region: string|null
+    tags: [string]
+    description: string|null
+    centrality: int|null    # degree for ranking
+    sources:
+      wikidata: string|null
+      wikipedia: string|null
+      sep: string|null
+      external: [string]
+
+edge:
+  required: [src, dst, rel]
+  rel_enum:
+    - influenced_by
+    - influenced
+    - inspired
+    - member_of
+    - criticized
+    - opposed_by
+    - school_of
+    - related
+  fields:
+    src: string
+    dst: string
+    rel: string
+    weight: float|null
+    note: string|null
+    label: string|null
+    provenance: object|null
+    sources:
+      wikidata: [string]|null
+      external: [string]|null

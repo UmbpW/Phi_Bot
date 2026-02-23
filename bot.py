@@ -92,6 +92,7 @@ from patterns.pattern_governor import (
 )
 from intent_philosophy_topic import detect_philosophy_topic_intent
 from intent_topic_v2 import is_topic_high
+from intent_philo_graph import is_philo_graph_intent, extract_names_naive
 from patterns.agency_layer import (
     strip_meta_format_questions,
     term_example_first,
@@ -136,6 +137,57 @@ from philosophy.practice_cooldown import (
     COOLDOWN_AFTER_PRACTICE,
     clamp_to_first_practice_only,
 )
+
+# PhiloBase v1: lazy-loaded philosophy graph DB
+_PHILO_DB = None
+
+
+def get_philo_db():
+    """Lazy singleton for PhiloDB (Wikidata-sourced philosophy graph)."""
+    global _PHILO_DB
+    if _PHILO_DB is None:
+        try:
+            from eval.philo.query import PhiloDB
+            path = os.environ.get("PHILO_DB_PATH", "eval/philo/philo_db.yaml")
+            _PHILO_DB = PhiloDB(path)
+        except Exception:
+            _PHILO_DB = False  # placeholder when DB missing
+    return _PHILO_DB if _PHILO_DB else None
+
+
+def try_graph_answer_ru(text: str) -> Optional[str]:
+    """Optional: when user names two philosophers, try shortest_path. Return None if unsure."""
+    from intent_philo_graph import RU_TO_EN_PHILO
+
+    db = get_philo_db()
+    if not db or not db.nodes:
+        return None
+    names = extract_names_naive(text or "")
+    if len(names) < 2:
+        return None
+    candidates = []
+    for n in names[:2]:
+        key = (n or "").strip().lower()
+        found = db.find_by_name(n)
+        if found:
+            candidates.append(found[0]["id"])
+            continue
+        en_key = RU_TO_EN_PHILO.get(key)
+        search = en_key if en_key else key
+        for node in db.nodes.values():
+            if search in node["name"].lower():
+                candidates.append(node["id"])
+                break
+        else:
+            return None
+    if len(candidates) != 2:
+        return None
+    path = db.shortest_path(candidates[0], candidates[1])
+    if not path:
+        return None
+    nodes = [db.nodes[i]["name"] for i in path]
+    return f"[PhiloDB path] {' → '.join(nodes)}"
+
 
 BOT_VERSION = "Phi_Bot v21.4-meta-tail-to-fork"
 
@@ -862,7 +914,12 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
     current_stage = USER_STAGE.get(user_id)
     # FIX: концептуальные вопросы (бог, философы 21 века) — не использовать first_turn gate,
     # иначе fallback "decision" даёт ответ про выбор/зона контроля вместо ответа на вопрос
-    is_concept = detect_philosophy_topic_intent(user_text)[0] or is_topic_high(user_text)
+    # PHILOBASE: граф влияний/связи философов → philosophy pipeline, не first_turn
+    is_concept = (
+        detect_philosophy_topic_intent(user_text)[0]
+        or is_topic_high(user_text)
+        or is_philo_graph_intent(user_text)
+    )
     skip_warmup = should_skip_warmup_first_turn(state, user_text, history_count, current_stage)
     # BUG1: telemetry для отладки роутинга
     _logger.info(
@@ -911,6 +968,24 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
         user_id, stage, user_text, context, state,
         llm_classify_fn=None if EVAL_SKIP_LLM_INTENT else llm_classify_topic_intent,
     )
+    # PHILOBASE: early routing for influence/connections questions
+    if is_philo_graph_intent(user_text):
+        plan.setdefault("stage_override", "guidance")
+        plan["philosophy_pipeline"] = True
+        plan["disable_warmup"] = True
+        plan["answer_first_required"] = True
+        plan["max_questions"] = 1
+        db = get_philo_db()
+        philo_hint = (
+            "\n\n[PHILO_DB]\n"
+            "You can use PhiloDB graph: nodes (philosopher, school) and edges (influenced, inspired, member_of, criticized/opposed_by). "
+            "If user asks about movements/schools/traditions: use school nodes + member_of edges. "
+            "If user asks 'who criticized/opposed': use criticized/opposed_by edges when present; otherwise answer normally. "
+            "Nodes may include birth_year, era (ancient/medieval/early_modern/modern/contemporary) and centrality for ranking. "
+            "Format in Markdown with bold headings. Mention Wikidata as source. "
+            "Optional: suggest link to philosophy-graph visualization for exploration."
+        )
+        plan["system_prompt_extra"] = philo_hint
     if plan.get("direct_reply_text"):
         reply_text = finalize_reply(plan["direct_reply_text"], plan)
         append_history(HISTORY_STORE, user_id, "user", user_text)
@@ -1081,6 +1156,7 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             lens_contents = [all_lenses.get(n, "") for n in selected_names]
             lens_contents = [c for c in lens_contents if c]
             system_prompt = build_system_prompt(main_prompt, lens_contents)
+            system_prompt += plan.get("system_prompt_extra", "")
             system_prompt += "\n\nExistential: макс. 2 рамки, каждая ≤2 предложения."
             if state.get("force_expand_next"):
                 system_prompt += "\n\n---\nforce_expand_next: Дай развёрнутый ответ с объяснением и примером. Не менее 2 абзацев."
@@ -1124,6 +1200,10 @@ def generate_reply_core(user_id: int, user_text: str) -> dict:
             ctx = pack_context(user_id, state, HISTORY_STORE, user_language=state.get("user_language"))
             if plan.get("explain_mode"):
                 ctx = (ctx + f"\n\n[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]").strip() if ctx else f"[explain_mode: true]\n[explain_topic: {(user_text or '')[:200]}]"
+            if plan.get("system_prompt_extra"):
+                path_hint = try_graph_answer_ru(user_text or "")
+                if path_hint:
+                    ctx = (ctx + f"\n\n{path_hint}").strip() if ctx else path_hint
             guidance_ctx_for_completion = {"system_prompt": system_prompt, "ctx": ctx, "user_text": user_text}
             reply_text = call_openai(system_prompt, user_text, context_block=ctx)
             # Fix Pack D: не укорачивать при rich_request / explain / philosophy

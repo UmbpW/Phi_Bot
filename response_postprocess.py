@@ -7,11 +7,23 @@ import re
 _logger = logging.getLogger("phi.telemetry")
 
 
+def ensure_markdown_spacing(t: str) -> str:
+    """PHILOBASE: improve Markdown readability — bullets, headings, collapse excess newlines."""
+    if not t:
+        return t
+    t = t.replace(" • ", "\n- ")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    # Merge "Label\n— text" into "**Label** — text"
+    t = re.sub(r"(\n)([А-ЯA-ZЁ][^\n]{1,60})\n—\s*", r"\1**\2** — ", t)
+    return t
+
+
 def format_readability_ru(text: str) -> str:
     """PATCH F: heuristic formatter for Telegram readability.
     - inserts paragraph breaks in long monolithic text
     - formats 1) 2) 3) enumerations into separate lines
     - keeps bullets '—' on separate lines
+    - ensure_markdown_spacing (bullet conversion, collapse newlines)
     """
     if not text:
         return text
@@ -56,6 +68,7 @@ def format_readability_ru(text: str) -> str:
         t = re.sub(r"(?<=[.!?])\s+(?=[А-ЯЁ])", _break_long, t, count=3)
 
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    t = ensure_markdown_spacing(t)
     return t
 
 

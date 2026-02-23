@@ -1,0 +1,18 @@
+# Manual critical/opposition edges (seed examples; extend as needed)
+# Resolved by name at import time
+edges:
+  - src_name: "Friedrich Nietzsche"
+    dst_name: "Arthur Schopenhauer"
+    rel: "criticized"
+    note: "criticized/argued against"
+    provenance:
+      source: "manual"
+      note: "seed example; extend as needed"
+
+  - src_name: "Karl Popper"
+    dst_name: "Plato"
+    rel: "criticized"
+    note: "criticized (open society critique)"
+    provenance:
+      source: "manual"
+      note: "seed example; extend as needed"
